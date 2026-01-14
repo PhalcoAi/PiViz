@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "piviz"
+version = "0.1.0"
+description = "Modern GPU-accelerated 3D visualization framework for scientific computing"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Yogesh Phalak", email = "yogeshphalak31415@gmail.com"}
+]
+keywords = [
+    "visualization",
+    "3d",
+    "graphics",
+    "opengl",
+    "moderngl",
+    "scientific",
+    "simulation",
+    "gpu",
+    "usd",
+    "physics",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Topic :: Multimedia :: Graphics :: 3D Rendering",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "moderngl>=5.8.0",
+    "moderngl-window>=2.4.0",
+    "imgui>=2.0.0",
+    "numpy>=1.20.0",
+    "psutil>=5.8.0",
+    "imageio[ffmpeg]>=2.30.0",
+    "usd-core>=23.08; platform_machine != 'aarch64'", # USD core usually has issues on some ARM/Apple Silicon via pip currently, but generally available
+    "GPUtil>=1.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+]
+all = ["piviz[dev]"]
+
+[project.urls]
+Homepage = "https://github.com/PhalcoAi/PiViz"
+Documentation = "https://github.com/PhalcoAi/PiViz#readme"
+Repository = "https://github.com/PhalcoAi/PiViz"
+Issues = "https://github.com/PhalcoAi/PiViz/issues"
+
+[project.scripts]
+piviz = "piviz.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["piviz*"]
+
+[tool.setuptools.package-data]
+piviz = ["resources/*", "resources/**/*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
