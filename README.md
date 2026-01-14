@@ -23,7 +23,7 @@
 Once released, you can install πViz directly into your environment:
 
 ```bash
-pip install piviz
+pip install piviz-3d
 
 ```
 
