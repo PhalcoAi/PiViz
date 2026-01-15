@@ -1,7 +1,7 @@
 # piviz/ui/overlay.py
 """
-Performance Overlay for PiViz
-=============================
+Performance Overlay for PiViz (IMPROVED)
+========================================
 
 Modern HUD-style overlay displaying:
 - FPS and frame time
@@ -15,6 +15,8 @@ import psutil
 import numpy as np
 import time
 from typing import TYPE_CHECKING, Dict, Any, Optional
+from collections import deque
+import threading
 
 if TYPE_CHECKING:
     from ..core.studio import PiVizStudio
@@ -31,24 +33,49 @@ except ImportError:
 
 class PiVizOverlay:
     """
-    Performance monitoring overlay.
+    Performance monitoring overlay with accurate FPS measurement.
     """
 
     def __init__(self, studio: 'PiVizStudio'):
         self.studio = studio
         self._theme: Optional['Theme'] = None
-        self.scale = 1.0  # <--- NEW: Track UI scale
+        self.scale = 1.0
 
-        # Performance history buffers
-        self.fps_history = np.zeros(120, dtype=np.float32)
-        self.frame_time_history = np.zeros(120, dtype=np.float32)
+        # === IMPROVED: Accurate FPS tracking ===
+        # Use deque for O(1) append/popleft instead of np.roll
+        self._history_size = 120
+        self._frame_times = deque(maxlen=self._history_size)
+
+        # For graph display (updated periodically, not every frame)
+        self.fps_history = np.zeros(self._history_size, dtype=np.float32)
+        self.frame_time_history = np.zeros(self._history_size, dtype=np.float32)
         self.cpu_history = np.zeros(60, dtype=np.float32)
         self.gpu_history = np.zeros(60, dtype=np.float32)
 
-        # Stats cache
+        # Circular buffer indices (avoid np.roll which is O(n))
+        self._fps_idx = 0
+        self._cpu_idx = 0
+        self._gpu_idx = 0
+
+        # === IMPROVED: Actual frame timing ===
+        self._last_frame_time = time.perf_counter()
         self._frame_count = 0
+
+        # Smoothed FPS with exponential moving average
+        self._smoothed_fps = 60.0
+        self._ema_alpha = 0.1  # Lower = smoother, higher = more responsive
+
+        # Stats cache update intervals
         self._last_cpu_update = 0.0
         self._last_gpu_update = 0.0
+        self._last_graph_update = 0.0
+
+        # CPU update interval (reduced from 0.5s to 1s to save CPU cycles)
+        self._cpu_update_interval = 1.0
+        # GPU update interval
+        self._gpu_update_interval = 1.0
+        # Graph update interval (don't update every frame)
+        self._graph_update_interval = 0.1  # 10 Hz
 
         # Cached values
         self._cpu_percent = 0.0
@@ -59,20 +86,25 @@ class PiVizOverlay:
         self._vram_percent = 0.0
         self._gpu_name = "N/A"
 
+        # Current display values
+        self._display_fps = 60.0
+        self._display_frame_ms = 16.67
+
         # Scene stats (set by user scene)
         self.scene_stats: Dict[str, Any] = {}
 
         # Timing
         self._start_time = time.time()
 
+        # === Thread-safe GPU monitoring ===
+        self._gpu_lock = threading.Lock()
+        self._gpu_thread_running = False
+
         self._detect_gpu()
 
-    # --- NEW METHOD: This was missing ---
     def set_scale(self, scale: float):
         """Update UI scale factor."""
         self.scale = scale
-
-    # ------------------------------------
 
     def _detect_gpu(self):
         """Detect GPU on startup."""
@@ -81,7 +113,6 @@ class PiVizOverlay:
                 gpus = GPUtil.getGPUs()
                 if gpus:
                     self._gpu_name = gpus[0].name
-                    # Removed truncation so it fits dynamically
             except Exception:
                 self._gpu_name = "Unknown"
 
@@ -120,7 +151,6 @@ class PiVizOverlay:
 
     def _draw_performance_panel(self, io, accent, text_dim):
         """Draw FPS and timing panel."""
-        # Scale dimensions
         padding = 15 * self.scale
         width = 260 * self.scale
 
@@ -141,8 +171,8 @@ class PiVizOverlay:
         imgui.text_colored(f"| {elapsed:.0f}s", text_dim[0], text_dim[1], text_dim[2], 1.0)
         imgui.spacing()
 
-        # FPS
-        fps = self.fps_history[-1]
+        # FPS - use smoothed display value
+        fps = self._display_fps
         fps_color = self._get_fps_color(fps)
         imgui.text_colored(f"{fps:.0f}", *fps_color)
         imgui.same_line()
@@ -150,7 +180,7 @@ class PiVizOverlay:
         imgui.same_line(spacing=20 * self.scale)
 
         # Frame time
-        frame_ms = self.frame_time_history[-1] * 1000
+        frame_ms = self._display_frame_ms
         imgui.text_colored(f"{frame_ms:.2f}", 0.9, 0.9, 0.9, 1.0)
         imgui.same_line()
         imgui.text_colored("ms", text_dim[0], text_dim[1], text_dim[2], 1.0)
@@ -174,7 +204,6 @@ class PiVizOverlay:
 
     def _draw_system_panel(self, io, accent, text_dim):
         """Draw system resources panel."""
-        # Calculate width dynamically based on GPU name length
         base_width = 205
         name_width = imgui.calc_text_size(self._gpu_name).x + 50
         panel_width = max(base_width, name_width) * self.scale
@@ -247,7 +276,6 @@ class PiVizOverlay:
     def _draw_scene_panel(self, io, accent, text_dim):
         """Draw custom scene statistics."""
         padding = 15 * self.scale
-        # Adjust Y position based on scale
         imgui.set_next_window_position(padding, io.display_size.y - (100 * self.scale))
         imgui.set_next_window_size(220 * self.scale, 0)
 
@@ -274,44 +302,74 @@ class PiVizOverlay:
         imgui.end()
 
     def _update_stats(self):
-        """Update performance statistics."""
+        """Update performance statistics with ACCURATE timing."""
+        current_time = time.perf_counter()
+        wall_time = time.time()
+
+        # === CRITICAL FIX: Calculate ACTUAL frame time ===
+        actual_frame_time = current_time - self._last_frame_time
+        self._last_frame_time = current_time
+
+        # Clamp to reasonable range (avoid division issues on first frame)
+        actual_frame_time = max(actual_frame_time, 0.0001)  # Min ~10000 FPS
+        actual_frame_time = min(actual_frame_time, 1.0)  # Max 1 FPS
+
+        actual_fps = 1.0 / actual_frame_time
+
+        # === Exponential Moving Average for smooth display ===
+        # This prevents jitter while still being responsive
+        self._smoothed_fps = (self._ema_alpha * actual_fps +
+                              (1 - self._ema_alpha) * self._smoothed_fps)
+
+        # Store for display
+        self._display_fps = self._smoothed_fps
+        self._display_frame_ms = actual_frame_time * 1000
+
+        # Track frame times for statistics
+        self._frame_times.append(actual_frame_time)
         self._frame_count += 1
-        io = imgui.get_io()
-        current_time = time.time()
 
-        # FPS (every frame)
-        self.fps_history = np.roll(self.fps_history, -1)
-        self.fps_history[-1] = io.framerate
+        # === Update graphs at reduced frequency (10 Hz) ===
+        if wall_time - self._last_graph_update > self._graph_update_interval:
+            self._last_graph_update = wall_time
 
-        self.frame_time_history = np.roll(self.frame_time_history, -1)
-        self.frame_time_history[-1] = 1.0 / max(io.framerate, 0.001)
+            # Use circular buffer instead of np.roll
+            self.fps_history[self._fps_idx] = self._smoothed_fps
+            self.frame_time_history[self._fps_idx] = actual_frame_time
+            self._fps_idx = (self._fps_idx + 1) % self._history_size
 
-        # CPU/RAM (every 0.5s)
-        if current_time - self._last_cpu_update > 0.5:
-            self._last_cpu_update = current_time
-            self._cpu_percent = psutil.cpu_percent()
+        # === CPU/RAM (every 1s to reduce overhead) ===
+        if wall_time - self._last_cpu_update > self._cpu_update_interval:
+            self._last_cpu_update = wall_time
+            # psutil.cpu_percent() is blocking - consider using interval=None
+            self._cpu_percent = psutil.cpu_percent(interval=None)
             mem = psutil.virtual_memory()
             self._ram_used_gb = mem.used / (1024 ** 3)
 
-            self.cpu_history = np.roll(self.cpu_history, -1)
-            self.cpu_history[-1] = self._cpu_percent
+            self.cpu_history[self._cpu_idx] = self._cpu_percent
+            self._cpu_idx = (self._cpu_idx + 1) % 60
 
-        # GPU (every 1s)
-        if HAS_GPU_UTIL and current_time - self._last_gpu_update > 1.0:
-            self._last_gpu_update = current_time
-            try:
-                gpus = GPUtil.getGPUs()
-                if gpus:
-                    gpu = gpus[0]
+        # === GPU (every 1s) ===
+        if HAS_GPU_UTIL and wall_time - self._last_gpu_update > self._gpu_update_interval:
+            self._last_gpu_update = wall_time
+            self._update_gpu_stats()
+
+    def _update_gpu_stats(self):
+        """Update GPU statistics (can be called from thread)."""
+        try:
+            gpus = GPUtil.getGPUs()
+            if gpus:
+                gpu = gpus[0]
+                with self._gpu_lock:
                     self._gpu_percent = gpu.load * 100
                     self._gpu_temp = gpu.temperature or 0
                     self._vram_used_mb = gpu.memoryUsed
                     self._vram_percent = (gpu.memoryUsed / gpu.memoryTotal * 100) if gpu.memoryTotal > 0 else 0
 
-                    self.gpu_history = np.roll(self.gpu_history, -1)
-                    self.gpu_history[-1] = self._gpu_percent
-            except Exception:
-                pass
+                self.gpu_history[self._gpu_idx] = self._gpu_percent
+                self._gpu_idx = (self._gpu_idx + 1) % 60
+        except Exception:
+            pass
 
     def _get_fps_color(self, fps):
         if fps >= 60:
