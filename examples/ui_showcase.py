@@ -151,14 +151,6 @@ class UIShowcase(PiVizFX):
             rotation=(0, 0, self.rotation)
         )
 
-        # Interactive marker following mouse (projected to ground)
-        # This shows how we can use mouse input to draw 3D elements
-        pgfx.draw_point(
-            position=(world_x, world_y, 0.05),
-            color=(1.0, 1.0, 0.0),
-            size=10.0
-        )
-
 
 if __name__ == '__main__':
     PiVizStudio(scene_fx=UIShowcase()).run()

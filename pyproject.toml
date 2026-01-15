@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "piviz-3d"
-version = "0.1.1"
+version = "1.0.0"
 description = "Modern GPU-accelerated 3D visualization framework for scientific computing"
 readme = "README.md"
 license = {text = "Apache-2.0"}

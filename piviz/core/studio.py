@@ -7,6 +7,17 @@ PiViz Studio - Main Application Engine
 import logging
 import sys
 
+# --- GPU AUTO-SELECTION (must be before OpenGL imports) ---
+try:
+    from .gpu_selector import auto_select_gpu
+
+    _gpu_result = auto_select_gpu(verbose=True)
+except ImportError:
+    _gpu_result = None
+
+
+# ----------------------------------------------------------
+
 
 # --- LOG SILENCING ---
 class MGLWSilencer(logging.Filter):
@@ -209,6 +220,10 @@ class PiVizStudio(mglw.WindowConfig):
             if self.scene:
                 self.scene.render(time, frame_time)
                 self.scene.loop(frame_time)
+
+                # === FLUSH ALL BATCHED PRIMITIVES ===
+                pgfx.flush_all()
+
                 if hasattr(self.scene, 'render_ui'): self.scene.render_ui()
 
             # --- EXPORT CAPTURE (Clean 3D view) ---
