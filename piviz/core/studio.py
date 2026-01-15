@@ -136,7 +136,7 @@ class PiVizStudio(mglw.WindowConfig):
         except:
             pass
         print(f"\n{c_blue}╔══════════════════════════════════════════════════════╗")
-        print(f"║ {c_green}πViz Studio{c_blue} v0.1.1             {c_grey}Interactive 3D Engine{c_blue} ║")
+        print(f"║ {c_green}πViz Studio{c_blue} v1.0.0             {c_grey}Interactive 3D Engine{c_blue} ║")
         print(f"╚══════════════════════════════════════════════════════╝{c_reset}")
         print(f" {c_grey}► System:{c_reset}   {platform.system()} {platform.release()}")
         print(f" {c_grey}► Python:{c_reset}   {platform.python_version()}")
