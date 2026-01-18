@@ -174,7 +174,7 @@ class ShapesShowcase(PiVizFX):
         """Main render loop."""
         # Update animation
         if self.animate:
-            self.rotation += dt * 30
+            self.rotation += dt * np.pi / 6  # 30 degrees per second
             self.time_val = time
 
         # Draw ground plane (always visible)
@@ -213,12 +213,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # SPHERE
         # pgfx.draw_sphere(center, radius, color, detail=12)
-        #
-        # Parameters:
-        #   center: (x, y, z) tuple - center position
-        #   radius: float - sphere radius
-        #   color: (r, g, b) or (r, g, b, a) - color values 0-1
-        #   detail: int - tessellation level (higher = smoother, default 12)
         # ---------------------------------------------------------------------
         pgfx.draw_sphere(
             center=(x_offset - 3, y_offset, 1.0),
@@ -239,12 +233,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # CUBE
         # pgfx.draw_cube(center, size, color, rotation=(0,0,0))
-        #
-        # Parameters:
-        #   center: (x, y, z) tuple - center position
-        #   size: float or (w, h, d) - uniform or per-axis size
-        #   color: (r, g, b) or (r, g, b, a) - color values 0-1
-        #   rotation: (rx, ry, rz) - rotation in degrees (currently Z only)
         # ---------------------------------------------------------------------
         pgfx.draw_cube(
             center=(x_offset, y_offset, 1.0),
@@ -264,13 +252,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # CYLINDER
         # pgfx.draw_cylinder(start, end, radius, color, detail=16)
-        #
-        # Parameters:
-        #   start: (x, y, z) tuple - starting point
-        #   end: (x, y, z) tuple - ending point
-        #   radius: float - cylinder radius
-        #   color: (r, g, b) or (r, g, b, a) - color values 0-1
-        #   detail: int - number of sides (higher = smoother, default 16)
         # ---------------------------------------------------------------------
         pgfx.draw_cylinder(
             start=(x_offset + 3, y_offset, 0),
@@ -295,13 +276,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # CONE
         # pgfx.draw_cone(base, tip, radius, color, detail=16)
-        #
-        # Parameters:
-        #   base: (x, y, z) tuple - center of the base circle
-        #   tip: (x, y, z) tuple - point of the cone
-        #   radius: float - base radius
-        #   color: (r, g, b) or (r, g, b, a) - color values 0-1
-        #   detail: int - number of sides (higher = smoother, default 16)
         # ---------------------------------------------------------------------
         pgfx.draw_cone(
             base=(x_offset + 6, y_offset, 0),
@@ -339,12 +313,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # PLANE
         # pgfx.draw_plane(size, color, center=(0,0,0), normal=(0,0,1))
-        #
-        # Parameters:
-        #   size: (width, height) tuple - dimensions of the plane
-        #   color: (r, g, b) or (r, g, b, a) - color values 0-1
-        #   center: (x, y, z) tuple - center position (default origin)
-        #   normal: (nx, ny, nz) - plane normal direction (default up)
         # ---------------------------------------------------------------------
 
         # Horizontal plane (default normal)
@@ -374,13 +342,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # TRIANGLE
         # pgfx.draw_triangle(v1, v2, v3, color)
-        #
-        # Parameters:
-        #   v1, v2, v3: (x, y, z) tuples - the three vertices
-        #   color: (r, g, b) or (r, g, b, a) - uniform color for entire triangle
-        #
-        # Note: Vertices should be in counter-clockwise order when viewed
-        #       from the front (determines which side is "front")
         # ---------------------------------------------------------------------
 
         # Basic triangle
@@ -415,16 +376,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # FACE (Per-Vertex Color Triangle)
         # pgfx.draw_face(v1, v2, v3, c1, c2, c3)
-        #
-        # Parameters:
-        #   v1, v2, v3: (x, y, z) tuples - the three vertices
-        #   c1, c2, c3: (r, g, b) tuples - color at each vertex
-        #
-        # The colors are interpolated across the triangle surface,
-        # creating smooth gradients. Useful for:
-        # - Vertex-colored meshes
-        # - Smooth color transitions
-        # - Heat maps and visualizations
         # ---------------------------------------------------------------------
 
         # RGB gradient triangle
@@ -478,15 +429,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # LINE
         # pgfx.draw_line(start, end, color, width=1.0)
-        #
-        # Parameters:
-        #   start: (x, y, z) tuple - starting point
-        #   end: (x, y, z) tuple - ending point
-        #   color: (r, g, b) or (r, g, b, a) - line color
-        #   width: float - line thickness in pixels (default 1.0)
-        #
-        # Note: Line width support depends on GPU/driver. Some systems
-        #       may clamp width to 1.0.
         # ---------------------------------------------------------------------
 
         # Basic lines with different widths
@@ -518,14 +460,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # PATH
         # pgfx.draw_path(points, color, width=1.0)
-        #
-        # Parameters:
-        #   points: list of (x, y, z) tuples - vertices of the path
-        #   color: (r, g, b) or (r, g, b, a) - path color
-        #   width: float - line thickness in pixels (default 1.0)
-        #
-        # Draws connected line segments through all points.
-        # More efficient than multiple draw_line() calls.
         # ---------------------------------------------------------------------
 
         # Sine wave path
@@ -562,17 +496,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # ARROW
         # pgfx.draw_arrow(start, end, color, head_size=0.1, head_radius=None, width_radius=0.03)
-        #
-        # Parameters:
-        #   start: (x, y, z) tuple - arrow tail position
-        #   end: (x, y, z) tuple - arrow head position
-        #   color: (r, g, b) or (r, g, b, a) - arrow color
-        #   head_size: float - length of arrowhead (default 0.1)
-        #   head_radius: float - radius of arrowhead cone (default 2.5x width)
-        #   width_radius: float - radius of arrow shaft (default 0.03)
-        #
-        # Composed of a cylinder (shaft) and cone (head).
-        # Useful for vectors, directions, forces.
         # ---------------------------------------------------------------------
 
         # Basic arrow
@@ -606,13 +529,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # POINT
         # pgfx.draw_point(position, color, size=5.0)
-        #
-        # Parameters:
-        #   position: (x, y, z) tuple - point location
-        #   color: (r, g, b) or (r, g, b, a) - point color
-        #   size: float - point diameter in pixels (default 5.0)
-        #
-        # Note: For many points, use draw_particles() instead (much faster).
         # ---------------------------------------------------------------------
 
         # Row of points with varying sizes
@@ -649,19 +565,6 @@ class ShapesShowcase(PiVizFX):
         # ---------------------------------------------------------------------
         # PARTICLES
         # pgfx.draw_particles(positions, colors, sizes=1.0)
-        #
-        # Parameters:
-        #   positions: numpy array (N, 3) - particle positions
-        #   colors: numpy array (N, 3) - RGB colors per particle
-        #   sizes: float or numpy array (N,) - size per particle
-        #
-        # Highly optimized for rendering thousands to millions of points.
-        # All particles rendered in a single draw call.
-        #
-        # Performance tips:
-        # - Use numpy arrays (not lists) for positions/colors
-        # - Use float32 dtype for best performance
-        # - Pre-allocate arrays if updating every frame
         # ---------------------------------------------------------------------
 
         # Rotate particle cloud
@@ -684,13 +587,6 @@ class ShapesShowcase(PiVizFX):
 
         # ---------------------------------------------------------------------
         # AUTOMATIC BATCHING (v2.0)
-        #
-        # In PiViz v2.0, all draw_sphere(), draw_cylinder(), draw_triangle()
-        # calls are automatically batched. You don't need to do anything
-        # special - just call the functions normally and they will be
-        # rendered efficiently.
-        #
-        # Example: Drawing 100 spheres in a loop results in only 1 draw call.
         # ---------------------------------------------------------------------
 
         # Grid of spheres (automatically batched)

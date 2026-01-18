@@ -1,6 +1,6 @@
 # piviz/graphics/primitives.py
 """
-PiViz High-Performance Primitives (v2.0)
+PiViz High-Performance Primitives (v1.0.1)
 ========================================
 
 ARCHITECTURE:
@@ -41,6 +41,7 @@ _triangle_queue: List[Tuple] = []
 _cached_sphere_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
 _cached_cube_vbo: Optional[Tuple[moderngl.Buffer, int]] = None
 _cached_unit_cylinder_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
+_cached_cone_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
 
 # Persistent instance buffers (grow as needed, never shrink)
 _instance_buffer: Optional[moderngl.Buffer] = None
@@ -372,6 +373,49 @@ def _generate_cylinder_geometry(detail: int = 16) -> np.ndarray:
     return np.array(vertices, dtype='f4')
 
 
+def _generate_cone_geometry(detail: int = 16) -> np.ndarray:
+    """Generate unit cone (base at z=0, tip at z=1, base radius=1)."""
+    vertices = []
+
+    # Calculate the slope angle for proper normals
+    # For a cone with height 1 and radius 1, the slope is 45 degrees
+    slope = 1.0 / math.sqrt(2.0)  # cos(45°) = sin(45°)
+
+    # Side faces - triangles from base edge to tip
+    for i in range(detail):
+        a0 = 2 * math.pi * i / detail
+        a1 = 2 * math.pi * (i + 1) / detail
+        c0, s0 = math.cos(a0), math.sin(a0)
+        c1, s1 = math.cos(a1), math.sin(a1)
+
+        # Normal for side face - average of the two edge normals
+        # For a cone, the normal points outward and upward
+        mid_angle = (a0 + a1) / 2
+        nx = math.cos(mid_angle) * slope
+        ny = math.sin(mid_angle) * slope
+        nz = slope
+
+        # Triangle: base vertex 0, base vertex 1, tip
+        # Vertex at base edge 0
+        vertices.extend([c0, s0, 0, c0 * slope, s0 * slope, slope])
+        # Vertex at base edge 1
+        vertices.extend([c1, s1, 0, c1 * slope, s1 * slope, slope])
+        # Tip vertex (use averaged normal for smooth shading)
+        vertices.extend([0, 0, 1, nx, ny, nz])
+
+    # Bottom cap
+    for i in range(detail):
+        a0 = 2 * math.pi * i / detail
+        a1 = 2 * math.pi * (i + 1) / detail
+        # Center vertex
+        vertices.extend([0, 0, 0, 0, 0, -1])
+        # Edge vertices (wound clockwise when viewed from below)
+        vertices.extend([math.cos(a1), math.sin(a1), 0, 0, 0, -1])
+        vertices.extend([math.cos(a0), math.sin(a0), 0, 0, 0, -1])
+
+    return np.array(vertices, dtype='f4')
+
+
 def _get_cached_sphere(detail: int = 12) -> Tuple[moderngl.Buffer, int]:
     """Get or create cached sphere geometry."""
     global _cached_sphere_vbo, _ctx
@@ -402,6 +446,16 @@ def _get_cached_cylinder(detail: int = 16) -> Tuple[moderngl.Buffer, int]:
     return _cached_unit_cylinder_vbo[detail]
 
 
+def _get_cached_cone(detail: int = 16) -> Tuple[moderngl.Buffer, int]:
+    """Get or create cached cone geometry."""
+    global _cached_cone_vbo, _ctx
+    if detail not in _cached_cone_vbo:
+        data = _generate_cone_geometry(detail)
+        vbo = _ctx.buffer(data.tobytes())
+        _cached_cone_vbo[detail] = (vbo, len(data) // 6)
+    return _cached_cone_vbo[detail]
+
+
 # ============================================================
 # TRANSFORM UTILITIES
 # ============================================================
@@ -415,6 +469,38 @@ def _make_transform_matrix(center, scale, rotation_matrix=None) -> np.ndarray:
         m[0, 0], m[1, 1], m[2, 2] = scale
     m[0, 3], m[1, 3], m[2, 3] = center
     return m
+
+
+def _make_rotation_matrix_xyz(rotation) -> np.ndarray:
+    """Create 3x3 rotation matrix from Euler angles (x, y, z) in radians."""
+    rx, ry, rz = rotation
+
+    # Rotation around X axis
+    cx, sx = math.cos(rx), math.sin(rx)
+    Rx = np.array([
+        [1, 0, 0],
+        [0, cx, -sx],
+        [0, sx, cx]
+    ], dtype='f4')
+
+    # Rotation around Y axis
+    cy, sy = math.cos(ry), math.sin(ry)
+    Ry = np.array([
+        [cy, 0, sy],
+        [0, 1, 0],
+        [-sy, 0, cy]
+    ], dtype='f4')
+
+    # Rotation around Z axis
+    cz, sz = math.cos(rz), math.sin(rz)
+    Rz = np.array([
+        [cz, -sz, 0],
+        [sz, cz, 0],
+        [0, 0, 1]
+    ], dtype='f4')
+
+    # Combined rotation: R = Rz * Ry * Rx
+    return Rz @ Ry @ Rx
 
 
 def _cylinder_transform(start, end, radius) -> np.ndarray:
@@ -451,6 +537,43 @@ def _cylinder_transform(start, end, radius) -> np.ndarray:
     m = np.eye(4, dtype='f4')
     m[:3, :3] = rot_scale
     m[0, 3], m[1, 3], m[2, 3] = start
+    return m
+
+
+def _cone_transform(base, tip, radius) -> np.ndarray:
+    """Create transform for unit cone to go from base to tip."""
+    base = np.array(base, dtype='f4')
+    tip = np.array(tip, dtype='f4')
+    axis = tip - base
+    length = np.linalg.norm(axis)
+    if length < 1e-6:
+        return np.eye(4, dtype='f4')
+
+    axis_norm = axis / length
+
+    # Build rotation matrix to align Z-axis with cone axis
+    z_axis = np.array([0, 0, 1], dtype='f4')
+    if abs(np.dot(axis_norm, z_axis)) > 0.999:
+        # Nearly parallel - use simple scaling
+        rot = np.eye(3, dtype='f4')
+        if axis_norm[2] < 0:
+            rot[2, 2] = -1
+    else:
+        # Rodrigues rotation
+        v = np.cross(z_axis, axis_norm)
+        s = np.linalg.norm(v)
+        c = np.dot(z_axis, axis_norm)
+        vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]], dtype='f4')
+        rot = np.eye(3, dtype='f4') + vx + vx @ vx * ((1 - c) / (s * s + 1e-8))
+
+    # Scale: radius in XY, length in Z
+    scale_mat = np.diag([radius, radius, length]).astype('f4')
+    rot_scale = rot @ scale_mat
+
+    # Build 4x4 matrix
+    m = np.eye(4, dtype='f4')
+    m[:3, :3] = rot_scale
+    m[0, 3], m[1, 3], m[2, 3] = base
     return m
 
 
@@ -570,7 +693,10 @@ def draw_face(v1, v2, v3, c1=(1, 0, 0), c2=(0, 1, 0), c3=(0, 0, 1)):
         return
     # For now, render immediately - could be batched later
     prog = _get_program('batched_lines')
+
+    # Corrected syntax here
     c1, c2, c3 = _ensure_rgba(c1), _ensure_rgba(c2), _ensure_rgba(c3)
+
     vertices = np.array([*v1, *c1, *v2, *c2, *v3, *c3], dtype='f4')
     vbo = _ctx.buffer(vertices.tobytes())
     vao = _ctx.vertex_array(prog, [(vbo, '3f 4f', 'in_position', 'in_color')])
@@ -601,7 +727,6 @@ def draw_particles(positions, colors, sizes=1.0):
     if _ctx is None:
         return
     prog = _get_program('particles')
-
     if not isinstance(positions, np.ndarray):
         positions = np.array(positions, dtype='f4')
     if not isinstance(colors, np.ndarray):
@@ -645,7 +770,6 @@ def draw_particles(positions, colors, sizes=1.0):
 def _ensure_instance_buffer(needed_bytes: int):
     """Ensure instance buffer is large enough."""
     global _instance_buffer, _instance_buffer_size, _ctx
-
     if _instance_buffer is None or _instance_buffer_size < needed_bytes:
         if _instance_buffer is not None:
             _instance_buffer.release()
@@ -658,7 +782,6 @@ def _ensure_instance_buffer(needed_bytes: int):
 def _ensure_line_buffer(needed_bytes: int):
     """Ensure line buffer is large enough."""
     global _line_buffer, _line_buffer_size, _ctx
-
     if _line_buffer is None or _line_buffer_size < needed_bytes:
         if _line_buffer is not None:
             _line_buffer.release()
@@ -670,7 +793,6 @@ def _ensure_line_buffer(needed_bytes: int):
 def _ensure_triangle_buffer(needed_bytes: int):
     """Ensure triangle buffer is large enough."""
     global _triangle_buffer, _triangle_buffer_size, _ctx
-
     if _triangle_buffer is None or _triangle_buffer_size < needed_bytes:
         if _triangle_buffer is not None:
             _triangle_buffer.release()
@@ -682,13 +804,12 @@ def _ensure_triangle_buffer(needed_bytes: int):
 def _render_instanced_shapes(queue: List, get_geometry_fn, shape_name: str):
     """Render a batch of shapes using instanced rendering."""
     global _ctx, _current_view, _current_proj
-
     if not queue:
         return
 
     prog = _get_program('instanced_solid')
 
-    # Group by detail level (for spheres/cylinders)
+    # Group by detail level (for spheres/cylinders/cones)
     by_detail: Dict[int, List] = {}
     for item in queue:
         detail = item[-1] if len(item) > 3 else 12
@@ -708,11 +829,23 @@ def _render_instanced_shapes(queue: List, get_geometry_fn, shape_name: str):
                 m = _make_transform_matrix(center, (radius, radius, radius))
             elif shape_name == 'cube':
                 center, size, color, rotation = item
-                m = _make_transform_matrix(center, size)
-                # TODO: Add rotation support
+                # Apply rotation if non-zero
+                if any(r != 0 for r in rotation):
+                    rot_matrix = _make_rotation_matrix_xyz(rotation)
+                    # Scale then rotate
+                    scale_mat = np.diag(size).astype('f4')
+                    rot_scale = rot_matrix @ scale_mat
+                    m = np.eye(4, dtype='f4')
+                    m[:3, :3] = rot_scale
+                    m[0, 3], m[1, 3], m[2, 3] = center
+                else:
+                    m = _make_transform_matrix(center, size)
             elif shape_name == 'cylinder':
                 start, end, radius, color, _ = item
                 m = _cylinder_transform(start, end, radius)
+            elif shape_name == 'cone':
+                base, tip, radius, color, _ = item
+                m = _cone_transform(base, tip, radius)
             else:
                 continue
 
@@ -750,7 +883,6 @@ def _render_instanced_shapes(queue: List, get_geometry_fn, shape_name: str):
 def _render_lines():
     """Render all queued lines in a single draw call."""
     global _ctx, _line_queue
-
     if not _line_queue:
         return
 
@@ -786,13 +918,12 @@ def _render_lines():
 def _render_triangles():
     """Render all queued triangles in a single draw call."""
     global _ctx, _triangle_queue
-
     if not _triangle_queue:
         return
 
     prog = _get_program('batched_triangles')
 
-    # Build vertex data: 3 vertices per triangle, 7 floats each (pos3 + color4)
+    # Build vertex data: 3 vertices per triangle, 7 floats each (pos3 + normal3 + color4)
     vertex_data = np.zeros((len(_triangle_queue) * 3, 10), dtype='f4')  # pos3 + normal3 + color4
 
     for i, (v1, v2, v3, color) in enumerate(_triangle_queue):
@@ -853,7 +984,6 @@ def _render_triangles():
 def _render_single_triangle(v1, v2, v3, color):
     """Render a single triangle (fallback - not used with batching)."""
     global _ctx
-
     prog = _get_program('batched_lines')
     v1, v2, v3 = np.array(v1), np.array(v2), np.array(v3)
     vertices = np.array([*v1, *color, *v2, *color, *v3, *color], dtype='f4')
@@ -874,13 +1004,12 @@ def flush_all():
     Called automatically by the engine at end of each frame.
     """
     global _sphere_queue, _cube_queue, _cylinder_queue, _cone_queue, _line_queue, _triangle_queue
-
     # Render each type
     _render_instanced_shapes(_sphere_queue, _get_cached_sphere, 'sphere')
     _render_instanced_shapes(_cube_queue, lambda d: _get_cached_cube(), 'cube')
     _render_instanced_shapes(_cylinder_queue, _get_cached_cylinder, 'cylinder')
-    # Cones use cylinder geometry with different transform (TODO: proper cone)
-    _render_instanced_shapes(_cone_queue, _get_cached_cylinder, 'cylinder')
+    # Cones use proper cone geometry with dedicated transform
+    _render_instanced_shapes(_cone_queue, _get_cached_cone, 'cone')
     _render_lines()
     _render_triangles()
 
@@ -895,9 +1024,8 @@ def flush_all():
 
 def clear_cache():
     """Clear all cached geometry (call on context recreation)."""
-    global _cached_sphere_vbo, _cached_cube_vbo, _cached_unit_cylinder_vbo
+    global _cached_sphere_vbo, _cached_cube_vbo, _cached_unit_cylinder_vbo, _cached_cone_vbo
     global _instance_buffer, _line_buffer
-
     for vbo, _ in _cached_sphere_vbo.values():
         try:
             vbo.release()
@@ -918,6 +1046,13 @@ def clear_cache():
         except:
             pass
     _cached_unit_cylinder_vbo.clear()
+
+    for vbo, _ in _cached_cone_vbo.values():
+        try:
+            vbo.release()
+        except:
+            pass
+    _cached_cone_vbo.clear()
 
     if _instance_buffer is not None:
         try:

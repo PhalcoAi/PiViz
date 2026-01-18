@@ -11,6 +11,7 @@ import os
 import sys
 import subprocess
 from typing import Optional, Tuple, List
+import re
 
 # --- VISUAL STYLING CONSTANTS ---
 C_BLUE = "\033[94m"
@@ -115,11 +116,40 @@ def auto_select_gpu(verbose: bool = True) -> dict:
     gpus = get_available_gpus()
     result['available_gpus'] = gpus
 
+    # --- Shared Colors ---
+    C_BLUE = "\033[94m"
+    C_GREEN = "\033[92m"
+    C_GREY = "\033[90m"
+    C_RESET = "\033[0m"
+    C_RED = "\033[91m"
+    C_YELLOW = "\033[93m"
+
+    # --- Formatting Helpers ---
+    def visible_len(s):
+        """Returns length of string ignoring ANSI color codes."""
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        return len(ansi_escape.sub('', s))
+
+    def print_boxed(content, color=C_BLUE, width=60):
+        """Prints a single line wrapped in a box with auto-alignment."""
+        # Top Border
+        print(f"\n{color}╔{'═' * (width - 2)}╗{C_RESET}")
+
+        # Content Line
+        v_len = visible_len(content)
+        padding = width - 4 - v_len
+        # Safety check to prevent negative padding if content is too long
+        if padding < 0:
+            padding = 0
+
+        print(f"{color}║ {C_RESET}{content}{' ' * padding} {color}║{C_RESET}")
+
+        # Bottom Border
+        print(f"{color}╚{'═' * (width - 2)}╝{C_RESET}")
+
     # Print Header
     if verbose:
-        print(f"\n{C_BLUE}╔══════════════════════════════════════════════════════╗")
-        print(f"║ {C_GREEN}GPU Auto-Select{C_BLUE}                                  ║")
-        print(f"╚══════════════════════════════════════════════════════╝{C_RESET}")
+        print_boxed(f"{C_GREEN}GPU Auto-Select{C_RESET} {C_GREY}(Scanning devices...){C_RESET}")
 
     if not gpus:
         if verbose:
@@ -131,8 +161,7 @@ def auto_select_gpu(verbose: bool = True) -> dict:
 
     if verbose:
         for g in gpus:
-            name_clean = g['name'][:45] + "..." if len(g['name']) > 45 else g['name']
-            print(f" {C_GREY}► Detect:{C_RESET}   {name_clean}")
+            print(f" {C_GREY}► Found:{C_RESET}   {g['name']}")
 
     # Logic
     best_gpu = gpus[0]
@@ -142,7 +171,12 @@ def auto_select_gpu(verbose: bool = True) -> dict:
     has_amd = any(g['vendor'] == 'amd' and g['type'] == 'discrete' for g in gpus)
     has_intel = any(g['vendor'] == 'intel' for g in gpus)
 
-    status_msg = ""
+    if verbose and best_gpu:
+        print(f" {C_GREY}► Best :{C_RESET}   {best_gpu['name']}")
+    else:
+        if verbose:
+            print(f" {C_GREY}► Best :{C_RESET}   {C_RED}No suitable GPU found{C_RESET}")
+        return result
 
     if has_nvidia and (has_intel or len(gpus) > 1):
         if get_current_prime_profile() == 'nvidia':

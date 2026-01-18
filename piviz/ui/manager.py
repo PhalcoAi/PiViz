@@ -36,7 +36,7 @@ class UIManager:
     # Layout constants
     PANEL_WIDTH = 280
     PANEL_PADDING = 15
-    SAFE_MARGIN_TOP = 180  # Below performance overlay
+    SAFE_MARGIN_TOP = 250  # Below performance overlay
     SAFE_MARGIN_BOTTOM = 80  # Above toolbar
     SAFE_MARGIN_LEFT = 150  # Right of ViewCube
 

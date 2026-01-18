@@ -158,9 +158,13 @@ class PiVizOverlay:
         imgui.set_next_window_size(width, 0)
 
         flags = (imgui.WINDOW_NO_DECORATION |
-                 imgui.WINDOW_NO_BACKGROUND |
                  imgui.WINDOW_NO_MOVE |
                  imgui.WINDOW_ALWAYS_AUTO_RESIZE)
+
+        # Add semi-transparent background for readability
+        imgui.push_style_color(imgui.COLOR_WINDOW_BACKGROUND, *self._theme.panel)
+        imgui.push_style_var(imgui.STYLE_WINDOW_ROUNDING, 8.0)
+        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (12 * self.scale, 10 * self.scale))
 
         imgui.begin("##perf", flags=flags)
 
@@ -180,15 +184,15 @@ class PiVizOverlay:
         imgui.same_line(spacing=20 * self.scale)
 
         # Frame time
-        frame_ms = self._display_frame_ms
-        imgui.text_colored(f"{frame_ms:.2f}", 0.9, 0.9, 0.9, 1.0)
+        text_primary = self._theme.text_primary
+        imgui.text_colored(f"{self._display_frame_ms:.2f}", *text_primary)
         imgui.same_line()
         imgui.text_colored("ms", text_dim[0], text_dim[1], text_dim[2], 1.0)
 
         # FPS graph
         imgui.plot_lines("##fps_graph", self.fps_history,
                          scale_min=0, scale_max=max(144, float(np.max(self.fps_history)) * 1.1),
-                         graph_size=(240 * self.scale, 35 * self.scale))
+                         graph_size=(236 * self.scale, 35 * self.scale))
 
         # Min/Avg/Max
         valid = self.fps_history[self.fps_history > 0]
@@ -201,23 +205,31 @@ class PiVizOverlay:
             imgui.text_colored(f"max {fps_max:.0f}", text_dim[0], text_dim[1], text_dim[2], 1.0)
 
         imgui.end()
+        imgui.pop_style_var(2)
+        imgui.pop_style_color()
 
     def _draw_system_panel(self, io, accent, text_dim):
         """Draw system resources panel."""
         base_width = 205
         name_width = imgui.calc_text_size(self._gpu_name).x + 50
         panel_width = max(base_width, name_width) * self.scale
-        padding = 15 * self.scale
+        padding = 50 * self.scale
 
-        imgui.set_next_window_position(io.display_size.x - panel_width - padding, padding)
+        imgui.set_next_window_position(io.display_size.x - panel_width - 15 * self.scale, padding)
         imgui.set_next_window_size(panel_width, 0)
 
         flags = (imgui.WINDOW_NO_DECORATION |
-                 imgui.WINDOW_NO_BACKGROUND |
                  imgui.WINDOW_NO_MOVE |
                  imgui.WINDOW_ALWAYS_AUTO_RESIZE)
 
+        # Add semi-transparent background for readability
+        imgui.push_style_color(imgui.COLOR_WINDOW_BACKGROUND, *self._theme.panel)
+        imgui.push_style_var(imgui.STYLE_WINDOW_ROUNDING, 8.0)
+        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (12 * self.scale, 10 * self.scale))
+
         imgui.begin("##system", flags=flags)
+
+        text_primary = self._theme.text_primary
 
         imgui.text_colored("SYSTEM", accent[0], accent[1], accent[2], 1.0)
         imgui.spacing()
@@ -232,12 +244,13 @@ class PiVizOverlay:
         # RAM
         imgui.text_colored("RAM", text_dim[0], text_dim[1], text_dim[2], 1.0)
         imgui.same_line(spacing=8 * self.scale)
-        imgui.text_colored(f"{self._ram_used_gb:.1f}GB", 0.9, 0.9, 0.9, 1.0)
+        imgui.text_colored(f"{self._ram_used_gb:.1f}GB", *text_primary)
 
         # CPU graph
+        graph_width = panel_width - 24 * self.scale
         imgui.plot_lines("##cpu_graph", self.cpu_history,
                          scale_min=0, scale_max=100,
-                         graph_size=(panel_width - 15, 25 * self.scale))
+                         graph_size=(graph_width, 25 * self.scale))
 
         # GPU section
         if HAS_GPU_UTIL and self._gpu_name != "N/A":
@@ -265,26 +278,34 @@ class PiVizOverlay:
             # VRAM
             imgui.text_colored("VRAM", text_dim[0], text_dim[1], text_dim[2], 1.0)
             imgui.same_line(spacing=5 * self.scale)
-            imgui.text_colored(f"{self._vram_used_mb:.0f}MB", 0.9, 0.9, 0.9, 1.0)
+            imgui.text_colored(f"{self._vram_used_mb:.0f}MB", *text_primary)
 
             imgui.plot_lines("##gpu_graph", self.gpu_history,
                              scale_min=0, scale_max=100,
-                             graph_size=(panel_width - 15, 25 * self.scale))
+                             graph_size=(graph_width, 25 * self.scale))
 
         imgui.end()
+        imgui.pop_style_var(2)
+        imgui.pop_style_color()
 
     def _draw_scene_panel(self, io, accent, text_dim):
         """Draw custom scene statistics."""
         padding = 15 * self.scale
-        imgui.set_next_window_position(padding, io.display_size.y - (100 * self.scale))
+        imgui.set_next_window_position(padding, io.display_size.y - (120 * self.scale))
         imgui.set_next_window_size(220 * self.scale, 0)
 
         flags = (imgui.WINDOW_NO_DECORATION |
-                 imgui.WINDOW_NO_BACKGROUND |
                  imgui.WINDOW_NO_MOVE |
                  imgui.WINDOW_ALWAYS_AUTO_RESIZE)
 
+        # Add semi-transparent background for readability
+        imgui.push_style_color(imgui.COLOR_WINDOW_BACKGROUND, *self._theme.panel)
+        imgui.push_style_var(imgui.STYLE_WINDOW_ROUNDING, 8.0)
+        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (12 * self.scale, 10 * self.scale))
+
         imgui.begin("##scene_stats", flags=flags)
+
+        text_primary = self._theme.text_primary
 
         imgui.text_colored("SCENE", accent[0], accent[1], accent[2], 1.0)
         imgui.spacing()
@@ -293,13 +314,15 @@ class PiVizOverlay:
             imgui.text_colored(str(key), text_dim[0], text_dim[1], text_dim[2], 1.0)
             imgui.same_line(spacing=10 * self.scale)
             if isinstance(value, float):
-                imgui.text_colored(f"{value:.2f}", 0.9, 0.9, 0.9, 1.0)
+                imgui.text_colored(f"{value:.2f}", *text_primary)
             elif isinstance(value, int):
-                imgui.text_colored(f"{value:,}", 0.9, 0.9, 0.9, 1.0)
+                imgui.text_colored(f"{value:,}", *text_primary)
             else:
-                imgui.text_colored(str(value), 0.9, 0.9, 0.9, 1.0)
+                imgui.text_colored(str(value), *text_primary)
 
         imgui.end()
+        imgui.pop_style_var(2)
+        imgui.pop_style_color()
 
     def _update_stats(self):
         """Update performance statistics with ACCURATE timing."""

@@ -66,10 +66,10 @@ class Camera:
         self.far = 1000.0
         self.aspect = 16 / 9
 
-        self.min_distance = 0.1
-        self.max_distance = 500.0
-        self.min_elevation = -89.0
-        self.max_elevation = 89.0
+        self.min_distance = 0.001
+        self.max_distance = 1000.0
+        self.min_elevation = -89.99
+        self.max_elevation = 89.99
 
         # Sensitivity settings
         self.orbit_sensitivity = 0.4
@@ -307,3 +307,26 @@ class Camera:
 
         self.elevation = np.clip(self.elevation, self.min_elevation, self.max_elevation)
         self.azimuth = self.azimuth % 360
+
+    def get_orthographic_matrix(self) -> np.ndarray:
+        """Calculate orthographic projection matrix."""
+        # Calculate the view volume based on distance and aspect ratio
+        # This gives a similar "view size" as the perspective projection
+        half_height = self.distance * math.tan(math.radians(self.fov) / 2)
+        half_width = half_height * self.aspect
+
+        left = -half_width
+        right = half_width
+        bottom = -half_height
+        top = half_height
+
+        proj = np.zeros((4, 4), dtype=np.float32)
+        proj[0, 0] = 2.0 / (right - left)
+        proj[1, 1] = 2.0 / (top - bottom)
+        proj[2, 2] = -2.0 / (self.far - self.near)
+        proj[0, 3] = -(right + left) / (right - left)
+        proj[1, 3] = -(top + bottom) / (top - bottom)
+        proj[2, 3] = -(self.far + self.near) / (self.far - self.near)
+        proj[3, 3] = 1.0
+
+        return proj
