@@ -51,6 +51,23 @@ _line_buffer_size: int = 0
 _triangle_buffer: Optional[moderngl.Buffer] = None
 _triangle_buffer_size: int = 0
 
+# Bounds tracking
+_current_min = np.full(3, np.inf, dtype='f4')
+_current_max = np.full(3, -np.inf, dtype='f4')
+_last_frame_bounds = ((-5.0, -5.0, -5.0), (5.0, 5.0, 5.0))
+
+
+def get_scene_bounds():
+    """Get the bounding box of the last rendered frame."""
+    return _last_frame_bounds
+
+
+def _update_bounds(p_min, p_max):
+    """Update current frame bounds."""
+    global _current_min, _current_max
+    _current_min = np.minimum(_current_min, p_min)
+    _current_max = np.maximum(_current_max, p_max)
+
 
 # ============================================================
 # MATERIAL SETTINGS
@@ -557,6 +574,11 @@ def _cone_transform(base, tip, radius) -> np.ndarray:
         # Nearly parallel - use simple scaling
         rot = np.eye(3, dtype='f4')
         if axis_norm[2] < 0:
+            # If pointing down (-Z), we need to flip the Z axis
+            # But just setting rot[2,2] = -1 flips Z, which turns a right-handed system into left-handed
+            # Better to rotate 180 degrees around X or Y
+            rot[0, 0] = 1
+            rot[1, 1] = -1
             rot[2, 2] = -1
     else:
         # Rodrigues rotation
@@ -599,6 +621,9 @@ def _init_context(ctx, view, proj):
 def draw_sphere(center=(0, 0, 0), radius=0.5, color=(0.7, 0.7, 0.7), detail=12):
     """Queue a sphere for batched rendering."""
     _sphere_queue.append((center, radius, _ensure_rgba(color), detail))
+    
+    c = np.array(center, dtype='f4')
+    _update_bounds(c - radius, c + radius)
 
 
 def draw_cube(center=(0, 0, 0), size=1.0, color=(0.7, 0.7, 0.7), rotation=(0, 0, 0)):
@@ -606,21 +631,47 @@ def draw_cube(center=(0, 0, 0), size=1.0, color=(0.7, 0.7, 0.7), rotation=(0, 0,
     if isinstance(size, (int, float)):
         size = (size, size, size)
     _cube_queue.append((center, size, _ensure_rgba(color), rotation))
+    
+    c = np.array(center, dtype='f4')
+    s = np.array(size, dtype='f4')
+    if any(r != 0 for r in rotation):
+        # Bounding sphere approximation for rotated cube
+        r = np.linalg.norm(s) * 0.5
+        _update_bounds(c - r, c + r)
+    else:
+        half = s * 0.5
+        _update_bounds(c - half, c + half)
 
 
 def draw_cylinder(start=(0, 0, 0), end=(0, 0, 1), radius=0.2, color=(0.7, 0.7, 0.7), detail=16):
     """Queue a cylinder for batched rendering."""
     _cylinder_queue.append((start, end, radius, _ensure_rgba(color), detail))
+    
+    p1 = np.array(start, dtype='f4')
+    p2 = np.array(end, dtype='f4')
+    b_min = np.minimum(p1, p2) - radius
+    b_max = np.maximum(p1, p2) + radius
+    _update_bounds(b_min, b_max)
 
 
 def draw_cone(base=(0, 0, 0), tip=(0, 0, 1), radius=0.3, color=(0.7, 0.7, 0.7), detail=16):
     """Queue a cone for batched rendering."""
     _cone_queue.append((base, tip, radius, _ensure_rgba(color), detail))
+    
+    p1 = np.array(base, dtype='f4')
+    p2 = np.array(tip, dtype='f4')
+    b_min = np.minimum(p1, p2) - radius
+    b_max = np.maximum(p1, p2) + radius
+    _update_bounds(b_min, b_max)
 
 
 def draw_line(start, end, color=(1, 1, 1), width=1.0):
     """Queue a line for batched rendering."""
     _line_queue.append((start, end, _ensure_rgba(color), width))
+    
+    p1 = np.array(start, dtype='f4')
+    p2 = np.array(end, dtype='f4')
+    _update_bounds(np.minimum(p1, p2), np.maximum(p1, p2))
 
 
 def draw_arrow(start, end, color=(1, 1, 1), head_size=0.1, head_radius=None, width_radius=0.03):
@@ -642,6 +693,9 @@ def draw_arrow(start, end, color=(1, 1, 1), head_size=0.1, head_radius=None, wid
 def draw_triangle(v1, v2, v3, color=(0.7, 0.7, 0.7)):
     """Queue a triangle for batched rendering."""
     _triangle_queue.append((v1, v2, v3, _ensure_rgba(color)))
+    
+    pts = np.array([v1, v2, v3], dtype='f4')
+    _update_bounds(np.min(pts, axis=0), np.max(pts, axis=0))
 
 
 def draw_plane(size=(5, 5), color=(0.5, 0.5, 0.5), center=(0, 0, 0), normal=(0, 0, 1)):
@@ -672,6 +726,11 @@ def draw_point(position, color=(1, 1, 1), size=5.0):
     global _ctx
     if _ctx is None:
         return
+    
+    # Update bounds
+    p = np.array(position, dtype='f4')
+    _update_bounds(p, p)
+    
     prog = _get_program('batched_lines')
     color = _ensure_rgba(color)
     vertices = np.array([*position, *color], dtype='f4')
@@ -691,6 +750,11 @@ def draw_face(v1, v2, v3, c1=(1, 0, 0), c2=(0, 1, 0), c3=(0, 0, 1)):
     global _ctx
     if _ctx is None:
         return
+    
+    # Update bounds
+    pts = np.array([v1, v2, v3], dtype='f4')
+    _update_bounds(np.min(pts, axis=0), np.max(pts, axis=0))
+    
     # For now, render immediately - could be batched later
     prog = _get_program('batched_lines')
 
@@ -726,6 +790,15 @@ def draw_particles(positions, colors, sizes=1.0):
     global _ctx
     if _ctx is None:
         return
+    
+    # Update bounds
+    if len(positions) > 0:
+        if not isinstance(positions, np.ndarray):
+             pos = np.array(positions, dtype='f4')
+        else:
+             pos = positions
+        _update_bounds(np.min(pos, axis=0), np.max(pos, axis=0))
+        
     prog = _get_program('particles')
     if not isinstance(positions, np.ndarray):
         positions = np.array(positions, dtype='f4')
@@ -1004,6 +1077,7 @@ def flush_all():
     Called automatically by the engine at end of each frame.
     """
     global _sphere_queue, _cube_queue, _cylinder_queue, _cone_queue, _line_queue, _triangle_queue
+    
     # Render each type
     _render_instanced_shapes(_sphere_queue, _get_cached_sphere, 'sphere')
     _render_instanced_shapes(_cube_queue, lambda d: _get_cached_cube(), 'cube')
@@ -1012,6 +1086,15 @@ def flush_all():
     _render_instanced_shapes(_cone_queue, _get_cached_cone, 'cone')
     _render_lines()
     _render_triangles()
+
+    # Update global last frame bounds
+    global _last_frame_bounds, _current_min, _current_max
+    if not np.all(np.isinf(_current_min)):
+        _last_frame_bounds = (tuple(_current_min), tuple(_current_max))
+    
+    # Reset for next frame
+    _current_min = np.full(3, np.inf, dtype='f4')
+    _current_max = np.full(3, -np.inf, dtype='f4')
 
     # Clear queues for next frame
     _sphere_queue.clear()

@@ -11,6 +11,8 @@ from piviz import (
     Dropdown, ProgressBar
 )
 
+import numpy as np
+
 
 class UIShowcase(PiVizFX):
     """
@@ -20,7 +22,7 @@ class UIShowcase(PiVizFX):
     def setup(self, ui_manager):
         # --- State Variables ---
         self.is_rotating = True
-        self.rotation_speed = 45.0
+        self.rotation_speed = np.pi / 4
         self.cube_color = (0.2, 0.7, 0.3)
         self.cube_scale = 1.0
         self.rotation = 0.0
@@ -70,7 +72,7 @@ class UIShowcase(PiVizFX):
         ui_manager.add_widget("speed_slider", Slider(
             rect=(0, 0, 200, 20),
             label="Speed",
-            min_val=0, max_val=180,
+            min_val=0, max_val=np.pi,
             initial_val=self.rotation_speed,
             callback=lambda v: setattr(self, 'rotation_speed', v)
         ))
@@ -134,7 +136,7 @@ class UIShowcase(PiVizFX):
         world_y = -(self.mouse_y - 450) / 100.0
 
         self.lbl_mouse.text = f"Mouse: {self.mouse_x}, {self.mouse_y} ({world_x:.1f}, {world_y:.1f})"
-        self.lbl_rot.text = f"Rotation: {self.rotation % 360:.1f}°"
+        self.lbl_rot.text = f"Rotation: {(self.rotation % (2 * np.pi)) * 180 / np.pi:.1f}°"
 
         # Render Scene
         # Ground plane

@@ -202,45 +202,51 @@ class ViewCube:
     def _rotate_point_by_camera(self, point: Tuple[float, float, float],
                                 azimuth_deg: float, elevation_deg: float) -> np.ndarray:
         """
-        Transform a world-space point to screen-space based on camera orientation.
-
-        This matches the camera's coordinate system:
-        - Azimuth: rotation around Z axis (0° = +Y direction)
-        - Elevation: rotation up/down from horizontal
-
-        Returns (screen_x_offset, screen_y_offset, depth) where:
-        - screen_x_offset: positive = right on screen
-        - screen_y_offset: positive = up on screen
-        - depth: positive = toward camera (visible)
+        Transform a world-space point to screen-space using explicit basis vectors.
+        Matches Camera coordinate system (Z-up).
         """
         x, y, z = point
-
+        
         # Convert to radians
         az = math.radians(azimuth_deg)
         el = math.radians(elevation_deg)
-
-        # Camera is at spherical coordinates (azimuth, elevation) looking at origin
-        # We need to transform the point into camera's view space
-
-        # Step 1: Rotate around Z by -azimuth (align camera direction with +Y)
-        cos_az = math.cos(-az)
-        sin_az = math.sin(-az)
-        x1 = x * cos_az - y * sin_az
-        y1 = x * sin_az + y * cos_az
-        z1 = z
-
-        # Step 2: Rotate around X by -elevation (align camera direction with horizontal)
-        cos_el = math.cos(-el)
-        sin_el = math.sin(-el)
-        x2 = x1
-        y2 = y1 * cos_el - z1 * sin_el
-        z2 = y1 * sin_el + z1 * cos_el
-
-        # Now: +Y is toward camera, +X is right, +Z is up
-        # Map to screen: x->screen_x, z->screen_y, y->depth
-        screen_x = x2  # Right on screen
-        screen_y = z2  # Up on screen
-        depth = y2  # Toward camera (positive = visible)
+        
+        # Precompute sines and cosines
+        c_az = math.cos(az)
+        s_az = math.sin(az)
+        c_el = math.cos(el)
+        s_el = math.sin(el)
+        
+        # Calculate Camera Basis Vectors in World Space
+        # These must match the View Matrix construction in Camera.get_view_matrix
+        
+        # Right Vector (Screen X)
+        # R = F x WorldUp
+        # F (Forward) = Target - Pos = -Pos (normalized)
+        # WorldUp = (0, 0, 1)
+        # Derived: (-cos(az), sin(az), 0)
+        rx = -c_az
+        ry = s_az
+        rz = 0.0
+        
+        # Up Vector (Screen Y)
+        # U = R x F
+        # Derived: (-sin(az)sin(el), -cos(az)sin(el), cos(el))
+        ux = -s_az * s_el
+        uy = -c_az * s_el
+        uz = c_el
+        
+        # View/Depth Vector (Screen Z / Depth)
+        # V = -F = Pos (normalized)
+        # Derived: (cos(el)sin(az), cos(el)cos(az), sin(el))
+        vx = c_el * s_az
+        vy = c_el * c_az
+        vz = s_el
+        
+        # Project point
+        screen_x = x * rx + y * ry + z * rz
+        screen_y = x * ux + y * uy + z * uz
+        depth    = x * vx + y * vy + z * vz
 
         return np.array([screen_x, screen_y, depth])
 

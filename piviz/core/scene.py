@@ -7,11 +7,12 @@ Users inherit from PiVizFX to create custom visualizations.
 Provides backward compatibility with PhalcoPulse API.
 """
 
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Tuple
 
 if TYPE_CHECKING:
     import moderngl
     from .studio import PiVizStudio
+from ..graphics import primitives as pgfx
 
 
 class PiVizFX:
@@ -37,12 +38,17 @@ class PiVizFX:
         self.wnd = None
         self.studio: Optional['PiVizStudio'] = None
         self._initialized = False
+        self.scale = 1.0
 
     def _internal_init(self, ctx, wnd, studio):
         """Internal initialization with OpenGL context. Called by Studio."""
         self.ctx = ctx
         self.wnd = wnd
         self.studio = studio
+        
+        # Initialize scale
+        if wnd:
+            self.resize(*wnd.size)
         
         # Call user setup with appropriate signature
         try:
@@ -86,7 +92,28 @@ class PiVizFX:
 
     def resize(self, width: int, height: int):
         """Called when window is resized."""
-        pass
+        self.scale = self.calculate_scale(width, height)
+
+    def calculate_scale(self, width: int, height: int) -> float:
+        """
+        Calculate scale factor based on window size.
+        Uses the smaller dimension ratio to ensure consistent scaling
+        across different aspect ratios (e.g. ultrawide monitors).
+        """
+        ref_w, ref_h = 1920.0, 1080.0
+        scale_x = width / ref_w
+        scale_y = height / ref_h
+        return max(1.0, min(scale_x, scale_y))
+
+    def get_bounds(self) -> Tuple[tuple, tuple]:
+        """
+        Get the bounding box of the scene.
+        Uses automatically tracked bounds from primitives.
+        
+        Returns:
+            (min_bound, max_bound) where each is (x, y, z)
+        """
+        return pgfx.get_scene_bounds()
 
     def key_event(self, key, action, modifiers):
         """Called on keyboard events."""
@@ -113,7 +140,7 @@ class PiVizFX:
         pass
 
     # === Utility Properties ===
-    
+
     @property
     def ui_manager(self):
         """Access to UI manager for adding widgets."""

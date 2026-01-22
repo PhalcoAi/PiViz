@@ -236,7 +236,13 @@ class PiVizStudio(mglw.WindowConfig):
 
     def _update_ui_scale(self, width, height):
         """Update UI scaling based on window size."""
-        self.ui_scale = max(1.0, width / 1920.0)
+        # Use the smaller dimension ratio to ensure consistent scaling
+        # across different aspect ratios (e.g. ultrawide monitors)
+        ref_w, ref_h = 1920.0, 1080.0
+        scale_x = width / ref_w
+        scale_y = height / ref_h
+        self.ui_scale = max(1.0, min(scale_x, scale_y))
+
         imgui.get_io().font_global_scale = self.ui_scale
         self.overlay.set_scale(self.ui_scale)
 
@@ -326,11 +332,13 @@ class PiVizStudio(mglw.WindowConfig):
         if self.scene and hasattr(self.scene, 'get_bounds'):
             min_bound, max_bound = self.scene.get_bounds()
             self.camera.fit_to_bounds(np.array(min_bound), np.array(max_bound))
+            self.camera.set_view('iso')
         else:
             self.camera.target = np.array([0.0, 0.0, 0.0], dtype=np.float32)
             self.camera.distance = 15.0
             self.camera.azimuth = 45.0
             self.camera.elevation = 30.0
+            self.camera.set_view('iso')
 
     # =========================================================================
     # RESIZE HANDLING
@@ -558,7 +566,7 @@ class PiVizStudio(mglw.WindowConfig):
             draw_list, start_x, y, button_size, spacing, 0,
             "Fit View (Home)", self._fit_view_to_scene
         )
-        self._draw_fit_icon(draw_list, cx, cy, button_size, col)
+        self._draw_home_icon(draw_list, cx, cy, button_size, col)
 
         # --- RECORD BUTTON ---
         is_rec = self.exporter._recording
@@ -624,6 +632,28 @@ class PiVizStudio(mglw.WindowConfig):
 
         col = imgui.get_color_u32_rgba(*self._theme.text_primary)
         return cx, cy, col
+
+    def _draw_home_icon(self, draw_list, cx, cy, button_size, col):
+        """Draw minimal professional home icon (SolidWorks/Matplotlib style)."""
+        s = button_size * 0.18  # Scale factor
+
+        # Roof (simple triangular outline)
+        draw_list.add_line(cx - s * 1.3, cy - s * 0.1, cx, cy - s * 1.5, col, 2.0)
+        draw_list.add_line(cx, cy - s * 1.5, cx + s * 1.3, cy - s * 0.1, col, 2.0)
+
+        # House body (square outline)
+        draw_list.add_rect(
+            cx - s * 1.0, cy - s * 0.1,
+            cx + s * 1.0, cy + s * 1.2,
+            col, rounding=0.0, thickness=2.0
+        )
+
+        # Chimney
+        draw_list.add_rect(
+            cx + s * 0.3, cy - s * 1.0,
+            cx + s * 0.7, cy - s * 0.5,
+            col, rounding=0.0, thickness=1.5
+        )
 
     def _draw_fit_icon(self, draw_list, cx, cy, button_size, col):
         """Draw fit/home icon."""

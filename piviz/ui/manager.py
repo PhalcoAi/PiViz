@@ -45,7 +45,7 @@ class UIManager:
         self.widgets: Dict[str, WidgetBase] = {}
         self._panel_visible = True
         self._panel_title = "Controls"
-        self._panel_position = 'right'  # 'right', 'left', 'top-right'
+        self._panel_position = 'left'  # Default to left
         self._panel_collapsed = False
 
     def add_widget(self, name: str, widget: WidgetBase) -> WidgetBase:
@@ -115,10 +115,10 @@ class UIManager:
             max_height = screen_h - self.SAFE_MARGIN_TOP - self.SAFE_MARGIN_BOTTOM
 
         elif self._panel_position == 'left':
-            # Left side, below ViewCube
+            # Left side, below performance overlay
             x = self.PANEL_PADDING
-            y = screen_h - 200 - self.SAFE_MARGIN_BOTTOM  # Above toolbar, below viewcube area
-            max_height = 180  # Limited height on left
+            y = self.SAFE_MARGIN_TOP
+            max_height = screen_h - self.SAFE_MARGIN_TOP - self.SAFE_MARGIN_BOTTOM
 
         elif self._panel_position == 'top-right':
             # Top right, below system stats
@@ -127,8 +127,8 @@ class UIManager:
             max_height = screen_h - self.SAFE_MARGIN_TOP - self.SAFE_MARGIN_BOTTOM - 50
 
         else:
-            # Default to right
-            x = screen_w - self.PANEL_WIDTH - self.PANEL_PADDING
+            # Default to left
+            x = self.PANEL_PADDING
             y = self.SAFE_MARGIN_TOP
             max_height = screen_h - self.SAFE_MARGIN_TOP - self.SAFE_MARGIN_BOTTOM
 

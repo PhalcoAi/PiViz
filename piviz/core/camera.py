@@ -68,8 +68,8 @@ class Camera:
 
         self.min_distance = 0.001
         self.max_distance = 1000.0
-        self.min_elevation = -89.99
-        self.max_elevation = 89.99
+        self.min_elevation = -90.0
+        self.max_elevation = 90.0
 
         # Sensitivity settings
         self.orbit_sensitivity = 0.4
@@ -147,12 +147,11 @@ class Camera:
         forward = self.target - position
         forward = forward / np.linalg.norm(forward)
 
-        world_up = np.array([0, 0, 1], dtype=np.float32)
+        # Use analytical up vector to avoid singularities at poles
+        # This replaces the unstable world_up=(0,0,1) logic
+        up_hint = self.get_up_vector()
 
-        right = np.cross(forward, world_up)
-        if np.linalg.norm(right) < 0.001:
-            world_up = np.array([0, 1, 0], dtype=np.float32)
-            right = np.cross(forward, world_up)
+        right = np.cross(forward, up_hint)
         right = right / np.linalg.norm(right)
 
         up = np.cross(right, forward)

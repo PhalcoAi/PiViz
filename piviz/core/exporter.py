@@ -43,9 +43,13 @@ class Exporter:
             timestamp = time.strftime("%Y%m%d-%H%M%S")
             filename = os.path.join(self._output_dir, f"screenshot_{timestamp}.png")
 
-        fbo = self.ctx.detect_framebuffer()
-        pixels = fbo.read(components=3, alignment=1)
-        img = Image.frombytes('RGB', fbo.size, pixels)
+        # Use screen framebuffer and current viewport
+        # This ensures we capture exactly what is visible, handling resize/maximize correctly
+        fbo = self.ctx.screen
+        x, y, width, height = self.ctx.viewport
+
+        pixels = fbo.read(viewport=(x, y, width, height), components=3, alignment=1)
+        img = Image.frombytes('RGB', (width, height), pixels)
         img = img.transpose(Image.FLIP_TOP_BOTTOM)
         img.save(filename)
         print(f"Snapshot saved: {filename}")
@@ -90,12 +94,21 @@ class Exporter:
         if not self._recording or not self._video_writer:
             return
 
-        fbo = self.ctx.detect_framebuffer()
-        pixels = fbo.read(components=3, alignment=1)
+        # Use screen framebuffer and current viewport
+        fbo = self.ctx.screen
+        x, y, width, height = self.ctx.viewport
+
+        pixels = fbo.read(viewport=(x, y, width, height), components=3, alignment=1)
 
         # Convert to numpy array
-        image = np.frombuffer(pixels, dtype='uint8').reshape((fbo.size[1], fbo.size[0], 3))
+        image = np.frombuffer(pixels, dtype='uint8').reshape((height, width, 3))
         image = np.flipud(image)
 
-        self._video_writer.append_data(image)
-        self._frame_count += 1
+        try:
+            self._video_writer.append_data(image)
+            self._frame_count += 1
+        except ValueError:
+            # Handle case where window size changed during recording
+            # imageio expects constant frame size
+            print("Warning: Window resized during recording. Stopping to prevent corruption.")
+            self.stop_recording()
