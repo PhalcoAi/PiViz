@@ -8,9 +8,9 @@ import logging
 import sys
 import numpy as np
 import time as time_module
-import re
-import os
 import platform
+import re
+import textwrap
 
 try:
     from .gpu_selector import auto_select_gpu
@@ -40,9 +40,9 @@ import moderngl_window as mglw
 import moderngl
 import imgui
 import math
+import os
 import traceback
 from typing import Optional, Union, Set
-from pathlib import Path
 
 from moderngl_window.integrations.imgui import ModernglWindowRenderer
 
@@ -74,13 +74,13 @@ class PiVizStudio(mglw.WindowConfig):
     _startup_scene = None
     _banner_printed = False
 
-    # Material Symbols Unicode codes (Google Material Icons)
+    # Material Symbols (Google Fonts)
     ICON_HOME = "\ue88a"  # home
-    ICON_EXPAND = "\ue3c9"  # fit_screen
+    ICON_EXPAND = "\ue3c9"  # fit_screen / fullscreen
     ICON_CAMERA = "\ue3af"  # photo_camera
-    ICON_VIDEO = "\ue04b"  # videocam
+    ICON_VIDEO = "\ue04b"  # movie / video_camera_front
     ICON_SUN = "\ue518"  # wb_sunny
-    ICON_MOON = "\ue51c"  # nights_stay
+    ICON_MOON = "\ue51c"  # nights_stay / bedtime
     ICON_GRID = "\ue3ec"  # grid_on
     ICON_AXES = "\ue558"  # 3d_rotation
     ICON_CUBE = "\ue164"  # view_in_ar
@@ -119,6 +119,13 @@ class PiVizStudio(mglw.WindowConfig):
 
         # --- UI SCALE ---
         self.ui_scale = 1.0
+        env_scale = os.environ.get('PIVIZ_UI_SCALE')
+        if env_scale:
+            try:
+                self.ui_scale = float(env_scale)
+                print(f"[UI Scale] Manual override: {self.ui_scale}")
+            except ValueError:
+                pass
 
         # --- CAMERA ---
         self.camera = Camera()
@@ -128,7 +135,7 @@ class PiVizStudio(mglw.WindowConfig):
         imgui.create_context()
         self.imgui_renderer = ModernglWindowRenderer(self.wnd)
 
-        # Load Fonts (with Material Symbols)
+        # Load Fonts
         self._icon_font = None
         self._load_fonts()
 
@@ -163,176 +170,70 @@ class PiVizStudio(mglw.WindowConfig):
             self._init_scene(PiVizStudio._startup_scene)
             PiVizStudio._startup_scene = None
 
-    # =========================================================================
-    # FONT LOADING (Cross-platform with Material Symbols)
-    # =========================================================================
-
     def _load_fonts(self):
-        """Load fonts including Material Symbols with cross-platform support."""
+        """Load fonts including Material Symbols."""
         io = imgui.get_io()
         io.fonts.clear()
 
-        # 1. Load default text font
-        text_font_loaded = self._load_system_font(io)
+        # 1. Load default font for text
+        # We use a system font if available for better readability
+        system_fonts = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "C:\\Windows\\Fonts\\arial.ttf",
+            "/System/Library/Fonts/Helvetica.ttc"
+        ]
+
+        text_font_loaded = False
+        for font_path in system_fonts:
+            if os.path.exists(font_path):
+                try:
+                    io.fonts.add_font_from_file_ttf(font_path, 20.0)
+                    print(f"Loaded text font: {font_path}")
+                    text_font_loaded = True
+                    break
+                except:
+                    pass
 
         if not text_font_loaded:
             io.fonts.add_font_default()
-            print("[Font] Using ImGui default font")
 
-        # 2. Load Material Symbols icon font
-        self._load_material_icons(io)
+        # 2. Load Material Symbols for icons
+        # Try to find the font file in resources or system
+        # You can download the .ttf from Google Fonts and put it in resources
+        icon_font_path = os.path.join(self.resource_dir, 'MaterialSymbolsRounded.ttf')
 
-        # Build and refresh texture
-        # io.fonts.build()
-        self.imgui_renderer.refresh_font_texture()
-
-    def _load_system_font(self, io):
-        """Load system font with cross-platform detection."""
-        system = platform.system()
-
-        # Platform-specific font paths
-        font_candidates = []
-
-        if system == "Linux":
-            font_candidates = [
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "/usr/share/fonts/TTF/DejaVuSans.ttf",
-                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-                "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
-                os.path.expanduser("~/.local/share/fonts/DejaVuSans.ttf")
-            ]
-        elif system == "Windows":
-            font_candidates = [
-                "C:\\Windows\\Fonts\\segoeui.ttf",  # Segoe UI (modern)
-                "C:\\Windows\\Fonts\\arial.ttf",  # Arial (classic)
-                "C:\\Windows\\Fonts\\calibri.ttf"  # Calibri
-            ]
-        elif system == "Darwin":  # macOS
-            font_candidates = [
-                "/System/Library/Fonts/SFNS.ttf",  # San Francisco
-                "/System/Library/Fonts/Helvetica.ttc",  # Helvetica
-                "/System/Library/Fonts/HelveticaNeue.ttc",  # Helvetica Neue
-                "/Library/Fonts/Arial.ttf"  # Arial
-            ]
-
-        # Try each candidate
-        for font_path in font_candidates:
-            if os.path.exists(font_path):
-                try:
-                    io.fonts.add_font_from_file_ttf(
-                        font_path,
-                        16.0 * self.ui_scale,
-                        None,
-                        io.fonts.get_glyph_ranges_default()
-                    )
-                    print(f"[Font] Loaded: {os.path.basename(font_path)}")
-                    return True
-                except Exception as e:
-                    print(f"[Font] Failed to load {font_path}: {e}")
-                    continue
-
-        return False
-
-    def _load_material_icons(self, io):
-        """Load Google Material Symbols with automatic download if missing."""
-        # Try multiple locations for the font file
-        possible_paths = [
-            # 1. Local resources directory
-            os.path.join(self.resource_dir, 'MaterialSymbolsRounded.ttf'),
-            os.path.join(self.resource_dir, 'fonts', 'MaterialSymbolsRounded.ttf'),
-
-            # 2. Package resources
-            os.path.join(os.path.dirname(__file__), '..', 'resources', 'MaterialSymbolsRounded.ttf'),
-            os.path.join(os.path.dirname(__file__), '..', 'resources', 'fonts', 'MaterialSymbolsRounded.ttf'),
-
-            # 3. User home directory
-            os.path.expanduser('~/.piviz/fonts/MaterialSymbolsRounded.ttf'),
-        ]
-
-        icon_font_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                icon_font_path = path
-                break
-
-        # If not found, try to download it
-        if icon_font_path is None:
-            icon_font_path = self._download_material_symbols()
-
-        if icon_font_path and os.path.exists(icon_font_path):
+        if os.path.exists(icon_font_path):
             try:
-                # Material Symbols uses Private Use Area (PUA)
-                # Range: U+E000 to U+F8FF
-                glyph_ranges = imgui.GlyphRanges([
-                    0xe000, 0xf8ff,  # PUA
-                    0
-                ])
+                # Merge with default font? No, load as separate font for icons
+                # This allows us to push/pop it specifically for icons
+                # Range for Material Symbols: U+E000 - U+F8FF (Private Use Area)
+                min_glyph = 0xe000
+                max_glyph = 0xf8ff
 
                 self._icon_font = io.fonts.add_font_from_file_ttf(
-                    icon_font_path,
-                    24.0 * self.ui_scale,
-                    None,
-                    glyph_ranges
+                    icon_font_path, 24.0,
+                    glyph_ranges=imgui.GlyphRanges([min_glyph, max_glyph, 0])
                 )
-                print(f"[Font] Loaded Material Symbols: {os.path.basename(icon_font_path)}")
-                return True
-
+                print(f"Loaded Material Symbols from {icon_font_path}")
             except Exception as e:
-                print(f"[Font] Failed to load Material Symbols: {e}")
+                print(f"Failed to load icon font: {e}")
                 self._icon_font = None
-                return False
         else:
-            print("[Font] Material Symbols not found, using vector fallback")
+            print(f"Icon font not found at {icon_font_path}. Using vector drawing fallback.")
             self._icon_font = None
-            return False
 
-    def _download_material_symbols(self):
-        """Download Material Symbols font if not present."""
-        try:
-            import urllib.request
-
-            # Create fonts directory
-            fonts_dir = os.path.join(self.resource_dir, 'fonts')
-            os.makedirs(fonts_dir, exist_ok=True)
-
-            target_path = os.path.join(fonts_dir, 'MaterialSymbolsRounded.ttf')
-
-            # Check if already exists
-            if os.path.exists(target_path):
-                return target_path
-
-            print("[Font] Downloading Material Symbols...")
-
-            # Direct download URL for Material Symbols Rounded (Variable font)
-            url = "https://github.com/google/material-design-icons/raw/master/variablefont/MaterialSymbolsRounded%5BFILL%2CGRAD%2Copsz%2Cwght%5D.ttf"
-
-            # Download with timeout
-            with urllib.request.urlopen(url, timeout=15) as response:
-                font_data = response.read()
-
-            # Write to file
-            with open(target_path, 'wb') as f:
-                f.write(font_data)
-
-            print(f"[Font] Downloaded Material Symbols to {target_path}")
-            return target_path
-
-        except Exception as e:
-            print(f"[Font] Download failed: {e}")
-            print("[Font] Please manually download MaterialSymbolsRounded.ttf to:")
-            print(f"       {os.path.join(self.resource_dir, 'fonts', 'MaterialSymbolsRounded.ttf')}")
-            print("[Font] Download from: https://fonts.google.com/icons")
-            return None
-
-    # =========================================================================
-    # WELCOME BANNER
-    # =========================================================================
+        self.imgui_renderer.refresh_font_texture()
 
     def _print_welcome_banner(self, detailed: bool = False):
-        """Print a compact, aligned startup banner with controls."""
+        """
+        Print a compact, aligned startup banner with controls.
+        """
         if getattr(PiVizStudio, '_banner_printed', False):
             return
         PiVizStudio._banner_printed = True
+
+
 
         # --- Configuration ---
         WIDTH = 78
@@ -362,9 +263,11 @@ class PiVizStudio(mglw.WindowConfig):
 
         def print_line(content, center=False):
             v_len = visible_len(content)
+            # Truncate if too long to prevent exploding the box
             if v_len > WIDTH - 4:
                 content = content[:WIDTH - 7] + "..."
                 v_len = visible_len(content)
+
             padding = WIDTH - 4 - v_len
             print(f"{BORDER_COLOR}║ {RESET}{content}{' ' * padding} {BORDER_COLOR}║{RESET}")
 
@@ -377,19 +280,31 @@ class PiVizStudio(mglw.WindowConfig):
         except:
             pass
 
-        # --- Print Banner ---
-        print("")
+        # --- Print Compact Banner ---
+        print("")  # Top spacing
         print_border(top=True)
-        header = f"{ACCENT_COLOR}πViz Studio {LABEL_COLOR}v1.0.2{RESET}   {TITLE_COLOR}Interactive 3D Engine{RESET}"
+
+        # Header
+        header = f"{ACCENT_COLOR}πViz Studio {LABEL_COLOR}v1.0.1{RESET}   {TITLE_COLOR}Interactive 3D Engine{RESET}"
         print_line(header)
+
         print_border(middle=True)
+
+        # System Info Row
         sys_info = f"{LABEL_COLOR}System:{RESET} {platform.system()} │ Python {platform.python_version()} │ {gpu_info}"
         print_line(sys_info)
+
         print_border(middle=True)
+
+        # Controls Section (Compact Columns)
+        # Mouse Row
         mouse = f"{LABEL_COLOR}Mouse:{RESET}  {TEXT_COLOR}L-Drag:{RESET} Orbit  │  {TEXT_COLOR}R-Drag:{RESET} Pan  │  {TEXT_COLOR}Scroll:{RESET} Zoom"
         print_line(mouse)
+
+        # Keys Row
         keys = f"{LABEL_COLOR}Keys:{RESET}   {TEXT_COLOR}H:{RESET} Home  │  {TEXT_COLOR}G/A:{RESET} Grid/Axes  │  {TEXT_COLOR}T:{RESET} Theme  │  {TEXT_COLOR}0-3:{RESET} Views"
         print_line(keys)
+
         print_border(bottom=True)
         print(f" {ACCENT_COLOR}Ready.{RESET} Launching window...\n")
 
@@ -399,13 +314,102 @@ class PiVizStudio(mglw.WindowConfig):
         scene._internal_init(self.ctx, self.wnd, self)
 
     def _update_ui_scale(self, width, height):
-        """Update UI scaling based on window size."""
-        ref_w, ref_h = 1920.0, 1080.0
-        scale_x = width / ref_w
-        scale_y = height / ref_h
-        self.ui_scale = max(1.0, min(scale_x, scale_y))
+        """Update UI scaling based on actual monitor DPI and physical resolution."""
+        # Get monitor info for adaptive scaling
+        monitor_info = self._get_monitor_info()
+
+        if monitor_info and monitor_info['dpi']:
+            # DPI-based scaling (best method)
+            # 96 DPI = 1.0 scale (standard)
+            # 144 DPI = 1.5 scale (high-DPI laptop)
+            # 192 DPI = 2.0 scale (4K monitor)
+            base_dpi = 96.0
+            self.ui_scale = monitor_info['dpi'] / base_dpi
+
+            # Clamp to reasonable range
+            self.ui_scale = max(0.8, min(self.ui_scale, 2.5))
+
+            print(f"[UI Scale] Monitor DPI: {monitor_info['dpi']:.0f}, Scale: {self.ui_scale:.2f}")
+        else:
+            # Fallback: resolution-based scaling
+            # Use physical monitor resolution, not window size
+            if monitor_info and monitor_info['native_width']:
+                ref_w = monitor_info['native_width']
+                ref_h = monitor_info['native_height']
+            else:
+                # Ultimate fallback
+                ref_w, ref_h = 1920.0, 1080.0
+
+            scale_x = width / ref_w
+            scale_y = height / ref_h
+            self.ui_scale = max(0.8, min(scale_x, scale_y))
+
+            print(f"[UI Scale] Resolution-based: {self.ui_scale:.2f}")
+
         imgui.get_io().font_global_scale = self.ui_scale
         self.overlay.set_scale(self.ui_scale)
+
+    def _get_monitor_info(self):
+        """Get current monitor information (DPI, resolution, physical size)."""
+        try:
+            import screeninfo
+            from screeninfo import get_monitors
+
+            monitors = get_monitors()
+
+            if not monitors:
+                return None
+
+            # Try to find the monitor containing the window
+            window_x, window_y = self.wnd.position if hasattr(self.wnd, 'position') else (0, 0)
+
+            current_monitor = None
+            for monitor in monitors:
+                # Check if window center is on this monitor
+                window_center_x = window_x + self.wnd.width // 2
+                window_center_y = window_y + self.wnd.height // 2
+
+                if (monitor.x <= window_center_x < monitor.x + monitor.width and
+                        monitor.y <= window_center_y < monitor.y + monitor.height):
+                    current_monitor = monitor
+                    break
+
+            # Fallback to primary monitor
+            if current_monitor is None:
+                current_monitor = monitors[0]
+
+            # Calculate DPI
+            dpi = None
+            if current_monitor.width_mm and current_monitor.width_mm > 0:
+                # DPI = pixels / inches
+                # mm to inches: divide by 25.4
+                dpi_x = current_monitor.width / (current_monitor.width_mm / 25.4)
+                dpi_y = current_monitor.height / (current_monitor.height_mm / 25.4)
+                dpi = (dpi_x + dpi_y) / 2
+
+            monitor_info = {
+                'name': current_monitor.name,
+                'dpi': dpi,
+                'native_width': current_monitor.width,
+                'native_height': current_monitor.height,
+                'physical_width_mm': current_monitor.width_mm,
+                'physical_height_mm': current_monitor.height_mm,
+                'is_primary': current_monitor.is_primary if hasattr(current_monitor, 'is_primary') else False
+            }
+
+            print(f"[Monitor] {monitor_info['name']}: {monitor_info['native_width']}x{monitor_info['native_height']}")
+            if dpi:
+                print(
+                    f"[Monitor] DPI: {dpi:.1f}, Physical: {monitor_info['physical_width_mm']}x{monitor_info['physical_height_mm']}mm")
+
+            return monitor_info
+
+        except ImportError:
+            print("[Monitor] screeninfo not available, install with: pip install screeninfo")
+            return None
+        except Exception as e:
+            print(f"[Monitor] Detection failed: {e}")
+            return None
 
     def run(self):
         """Run the application."""
@@ -416,14 +420,18 @@ class PiVizStudio(mglw.WindowConfig):
             sys.exit(1)
 
     def _print_crash_report(self, e: Exception):
-        """Print formatted crash report."""
-        import textwrap
+        """Print formatted crash report with wrapped text."""
+
+        # --- Colors ---
         c_red = "\033[91m"
         c_grey = "\033[90m"
         c_reset = "\033[0m"
         c_white = "\033[97m"
+
+        # --- Configuration ---
         WIDTH = 60
 
+        # --- Helpers ---
         def visible_len(s):
             ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
             return len(ansi_escape.sub('', s))
@@ -433,16 +441,21 @@ class PiVizStudio(mglw.WindowConfig):
             padding = WIDTH - 4 - v_len
             print(f"{color}║ {text_color}{content}{' ' * padding} {color}║{c_reset}")
 
+        # --- Print Box ---
         print(f"\n{c_red}╔{'═' * (WIDTH - 2)}╗{c_reset}")
+
+        # Title
         print_line("CRITICAL ERROR", text_color=c_white)
         print(f"{c_red}╠{'═' * (WIDTH - 2)}╣{c_reset}")
-
         error_msg = str(e)
         wrapped_lines = textwrap.wrap(error_msg, width=WIDTH - 4)
+
         for line in wrapped_lines:
             print_line(line)
 
         print(f"{c_red}╚{'═' * (WIDTH - 2)}╝{c_reset}")
+
+        # --- Stack Trace ---
         print(f"\n{c_grey}--- Stack Trace ---{c_reset}")
         traceback.print_exc()
 
@@ -494,16 +507,18 @@ class PiVizStudio(mglw.WindowConfig):
     # =========================================================================
 
     def _check_for_resize(self):
-        """Poll-based resize detection."""
+        """Poll-based resize detection - catches ALL resize types."""
         current_size = (self.wnd.width, self.wnd.height)
 
         if current_size != self._last_window_size:
             width, height = current_size
             self._last_window_size = current_size
 
+            # Immediate lightweight updates
             self.imgui_renderer.resize(width, height)
             self.camera.resize(width, height)
 
+            # Schedule deferred heavy updates
             self._pending_width = width
             self._pending_height = height
             self._resize_timer = 0.15
@@ -512,13 +527,20 @@ class PiVizStudio(mglw.WindowConfig):
     def _delayed_resize(self, width, height):
         """Execute heavy resize operations after dragging stops."""
         self._is_resizing = False
+
+        # Update UI scale
         self._update_ui_scale(width, height)
+
+        # Resize exporter (reallocates GPU buffers)
         self.exporter.resize(width, height)
+
+        # Resize scene if it has buffers
         if self.scene:
             self.scene.resize(width, height)
 
     def on_resize(self, width: int, height: int):
-        """Event-based resize handler (fallback)."""
+        """Event-based resize handler (fallback, main detection is poll-based)."""
+        # Handled by _check_for_resize() in render loop
         pass
 
     # =========================================================================
@@ -535,18 +557,22 @@ class PiVizStudio(mglw.WindowConfig):
             if not hasattr(self, 'ctx'):
                 return
 
+            # Poll for resize (catches horizontal/vertical/diagonal)
             self._check_for_resize()
 
+            # Handle resize timer
             if self._resize_timer > 0:
                 self._resize_timer -= frame_time
                 if self._resize_timer <= 0:
                     self._delayed_resize(self._pending_width, self._pending_height)
                     self._resize_timer = 0
 
+            # Lightweight render during active resize
             if self._is_resizing:
                 self._render_resize_preview()
                 return
 
+            # Full render
             self._render_full(time, frame_time)
 
         except Exception as e:
@@ -554,45 +580,64 @@ class PiVizStudio(mglw.WindowConfig):
             self.wnd.close()
 
     def _render_resize_preview(self):
-        """Minimal render during resize."""
+        """Minimal render during resize for smooth dragging."""
         bg = self._theme.background
         self.ctx.clear(*bg[:3])
+
+        # Minimal ImGui frame (required to prevent crashes)
         imgui.new_frame()
         imgui.render()
         self.imgui_renderer.render(imgui.get_draw_data())
 
     def _render_full(self, time: float, frame_time: float):
-        """Full scene render."""
+        """Full scene render for normal operation."""
         self._process_input(frame_time)
+
+        # Start ImGui frame
         imgui.new_frame()
+
+        # Update viewcube
         self.viewcube.update(frame_time, self.camera)
 
+        # Clear and set render state
         bg = self._theme.background
         self.ctx.clear(*bg[:3])
         self.ctx.enable(moderngl.DEPTH_TEST | moderngl.CULL_FACE | moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
 
+        # Get view/projection matrices
         view = self.camera.get_view_matrix()
         proj = self.camera.get_orthographic_matrix() if self.use_orthographic else self.camera.get_projection_matrix()
 
+        # Initialize primitive graphics context
         pgfx._init_context(self.ctx, view, proj)
 
+        # Render environment
         if self.show_grid:
             self.grid_renderer.render(view, proj, self.camera)
         if self.show_axes:
             self.axes_renderer.render(view, proj)
 
+        # Render scene
         if self.scene:
             self.scene.render(time, frame_time)
             self.scene.loop(frame_time)
+
+            # Flush batched primitives
             pgfx.flush_all()
+
+            # Render scene UI
             if hasattr(self.scene, 'render_ui'):
                 self.scene.render_ui()
 
+        # Capture frame for export (before UI overlay)
         if self.exporter._recording:
             self.exporter.capture_frame()
 
+        # Render UI
         self._render_ui()
+
+        # Finalize ImGui
         imgui.render()
         self.imgui_renderer.render(imgui.get_draw_data())
 
@@ -615,13 +660,14 @@ class PiVizStudio(mglw.WindowConfig):
         """Render all UI components."""
         if self.show_overlay:
             self.overlay.render()
+
         self.viewcube.render(self.camera)
         self._draw_view_toggles()
         self._draw_top_controls()
         self.ui_manager.render()
 
     def _draw_view_toggles(self):
-        """Draw Grid/Axes/Ortho toggles."""
+        """Draw minimal Grid/Axes/Ortho toggles near the ViewCube."""
         io = imgui.get_io()
         x = 15
         y = io.display_size.y - 270
@@ -637,24 +683,29 @@ class PiVizStudio(mglw.WindowConfig):
         )
 
         imgui.begin("##view_toggles", flags=flags)
+
         accent = self._theme.accent
         imgui.push_style_color(imgui.COLOR_CHECK_MARK, *accent)
+
         _, self.show_grid = imgui.checkbox("Grid", self.show_grid)
         _, self.show_axes = imgui.checkbox("Axes", self.show_axes)
         _, self.use_orthographic = imgui.checkbox("Ortho", self.use_orthographic)
+
         imgui.pop_style_color()
         imgui.end()
 
     def _draw_top_controls(self):
-        """Draw top-right control buttons."""
+        """Draw top-right control buttons: Fit View, Record, Screenshot, Theme."""
         io = imgui.get_io()
 
+        # Button configuration
         button_size = 32 * self.ui_scale
         margin = 15 * self.ui_scale
         spacing = 8 * self.ui_scale
         num_buttons = 4
         total_w = (button_size * num_buttons) + (spacing * (num_buttons - 1))
 
+        # Position: top-right
         start_x = io.display_size.x - total_w - margin - 20
         y = margin - 10
 
@@ -669,21 +720,23 @@ class PiVizStudio(mglw.WindowConfig):
         )
 
         imgui.begin("##top_controls", flags=flags)
+
         draw_list = imgui.get_window_draw_list()
 
-        # Home button
+        # --- FIT VIEW BUTTON ---
         cx, cy, col = self._draw_circle_button(
             draw_list, start_x, y, button_size, spacing, 0,
             "Fit View (Home)", self._fit_view_to_scene
         )
         self._draw_home_icon(draw_list, cx, cy, button_size, col)
 
-        # Record button
+        # --- RECORD BUTTON ---
         is_rec = self.exporter._recording
         is_flash = is_rec and (int(time_module.time() * 2) % 2 == 0)
+
         cx, cy, col = self._draw_circle_button(
             draw_list, start_x, y, button_size, spacing, 1,
-            "Stop Recording" if is_rec else "Record Video",
+            "Stop Recording" if is_rec else "Record Video (MP4)",
             lambda: self.exporter.stop_recording() if is_rec else self.exporter.start_recording(),
             is_active=is_rec, is_flash=is_flash
         )
@@ -692,18 +745,19 @@ class PiVizStudio(mglw.WindowConfig):
         if not is_rec:
             self._draw_video_icon(draw_list, cx, cy, button_size, col)
 
-        # Screenshot button
+        # --- SCREENSHOT BUTTON ---
         cx, cy, col = self._draw_circle_button(
             draw_list, start_x, y, button_size, spacing, 2,
-            "Screenshot", lambda: self.exporter.take_screenshot()
+            "Take Screenshot (Clean)", lambda: self.exporter.take_screenshot()
         )
         self._draw_camera_icon(draw_list, cx, cy, button_size, col)
 
-        # Theme button
+        # --- THEME BUTTON ---
         cx, cy, col = self._draw_circle_button(
             draw_list, start_x, y, button_size, spacing, 3,
             "Toggle Theme (T)", self.toggle_theme
         )
+
         if self._theme_name == 'dark':
             self._draw_moon_icon(draw_list, cx, cy, button_size * 0.32)
         else:
@@ -713,13 +767,16 @@ class PiVizStudio(mglw.WindowConfig):
 
     def _draw_circle_button(self, draw_list, start_x, y, button_size, spacing,
                             offset_idx, tooltip, callback, is_active=False, is_flash=False):
-        """Draw circular button."""
+        """Draw a circular button and handle interaction."""
         io = imgui.get_io()
+
         cx = start_x + (button_size / 2) + (offset_idx * (button_size + spacing)) + 8
         cy = y + button_size / 2 + 8
+
         mx, my = io.mouse_pos
         is_hovered = ((mx - cx) ** 2 + (my - cy) ** 2) < (button_size / 2 + 2) ** 2
 
+        # Determine background color
         if is_flash:
             bg = (0.8, 0.1, 0.1, 0.8)
         elif is_active:
@@ -733,39 +790,58 @@ class PiVizStudio(mglw.WindowConfig):
 
         if is_hovered and imgui.is_mouse_clicked(0):
             callback()
+
         if is_hovered:
             imgui.set_tooltip(tooltip)
 
         col = imgui.get_color_u32_rgba(*self._theme.text_primary)
         return cx, cy, col
 
-    # =========================================================================
-    # ICON DRAWING (with Material Symbols support + vector fallback)
-    # =========================================================================
-
     def _draw_icon_text(self, draw_list, cx, cy, button_size, icon_unicode, col):
-        """Draw icon using Material Symbols font with fallback."""
+        """Draw icon using text rendering."""
         if self._icon_font:
             imgui.push_font(self._icon_font)
-            text_size = imgui.calc_text_size(icon_unicode)
-            text_x = cx - text_size.x / 2
-            text_y = cy - text_size.y / 2
-            draw_list.add_text(text_x, text_y, col, icon_unicode)
+
+        text_size = imgui.calc_text_size(icon_unicode)
+        text_x = cx - text_size.x / 2
+        text_y = cy - text_size.y / 2
+        draw_list.add_text(text_x, text_y, col, icon_unicode)
+
+        if self._icon_font:
             imgui.pop_font()
-            return True
-        return False
 
     def _draw_home_icon(self, draw_list, cx, cy, button_size, col):
         """Draw home icon."""
-        if not self._draw_icon_text(draw_list, cx, cy, button_size, self.ICON_HOME, col):
+        if self._icon_font:
+            self._draw_icon_text(draw_list, cx, cy, button_size, self.ICON_HOME, col)
+        else:
+            # Fallback to vector drawing
             s = button_size * 0.18
             draw_list.add_line(cx - s * 1.3, cy - s * 0.1, cx, cy - s * 1.5, col, 2.0)
             draw_list.add_line(cx, cy - s * 1.5, cx + s * 1.3, cy - s * 0.1, col, 2.0)
             draw_list.add_rect(cx - s * 1.0, cy - s * 0.1, cx + s * 1.0, cy + s * 1.2, col, rounding=0.0, thickness=2.0)
+            draw_list.add_rect(cx + s * 0.3, cy - s * 1.0, cx + s * 0.7, cy - s * 0.5, col, rounding=0.0, thickness=1.5)
+
+    def _draw_fit_icon(self, draw_list, cx, cy, button_size, col):
+        """Draw fit/expand icon."""
+        if self._icon_font:
+            self._draw_icon_text(draw_list, cx, cy, button_size, self.ICON_EXPAND, col)
+        else:
+            r = button_size * 0.22
+            draw_list.add_rect(cx - r, cy - r, cx + r, cy + r, col, rounding=2.0, thickness=1.5)
+            draw_list.add_circle_filled(cx, cy, r * 0.25, col, 8)
+            arrow_len = r * 0.4
+            corners = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
+            for dx, dy in corners:
+                ox = cx + dx * r * 0.7
+                oy = cy + dy * r * 0.7
+                draw_list.add_line(ox, oy, ox - dx * arrow_len, oy - dy * arrow_len, col, 1.5)
 
     def _draw_camera_icon(self, draw_list, cx, cy, button_size, col):
         """Draw camera icon."""
-        if not self._draw_icon_text(draw_list, cx, cy, button_size, self.ICON_CAMERA, col):
+        if self._icon_font:
+            self._draw_icon_text(draw_list, cx, cy, button_size, self.ICON_CAMERA, col)
+        else:
             r = button_size * 0.2
             draw_list.add_rect(cx - r * 1.2, cy - r * 0.8, cx + r * 1.2, cy + r * 0.8, col, rounding=2.0, thickness=1.5)
             draw_list.add_circle(cx, cy, r * 0.5, col, num_segments=12, thickness=1.5)
@@ -773,19 +849,25 @@ class PiVizStudio(mglw.WindowConfig):
 
     def _draw_video_icon(self, draw_list, cx, cy, button_size, col):
         """Draw video icon."""
-        r = button_size * 0.2
-        draw_list.add_rect(cx - r * 1.2, cy - r * 0.8, cx + r * 1.2, cy + r * 0.8, col, rounding=2.0, thickness=1.5)
-        draw_list.add_triangle_filled(cx + r * 0.4, cy - r * 0.4, cx + r * 0.4, cy + r * 0.4, cx + r * 1.0, cy, col)
+        if self._icon_font:
+            self._draw_icon_text(draw_list, cx, cy, button_size, self.ICON_VIDEO, col)
+        else:
+            r = button_size * 0.2
+            draw_list.add_rect(cx - r * 1.2, cy - r * 0.8, cx + r * 1.2, cy + r * 0.8, col, rounding=2.0, thickness=1.5)
+            draw_list.add_triangle_filled(cx + r * 1.2, cy - r * 0.4, cx + r * 1.2, cy + r * 0.4, cx + r * 1.8, cy, col)
 
     def _draw_sun_icon(self, draw_list, cx, cy, radius):
         """Draw sun icon."""
         col = imgui.get_color_u32_rgba(*self._theme.text_primary)
-        if not self._draw_icon_text(draw_list, cx, cy, radius * 2, self.ICON_SUN, col):
+        if self._icon_font:
+            self._draw_icon_text(draw_list, cx, cy, radius * 2, self.ICON_SUN, col)
+        else:
             draw_list.add_circle_filled(cx, cy, radius * 0.45, col, 16)
             num_rays = 8
             for i in range(num_rays):
                 angle = (i / num_rays) * 2 * math.pi - math.pi / 8
-                inner_r, outer_r = radius * 0.6, radius * 1.0
+                inner_r = radius * 0.6
+                outer_r = radius * 1.0
                 x1 = cx + math.cos(angle) * inner_r
                 y1 = cy + math.sin(angle) * inner_r
                 x2 = cx + math.cos(angle) * outer_r
@@ -795,7 +877,9 @@ class PiVizStudio(mglw.WindowConfig):
     def _draw_moon_icon(self, draw_list, cx, cy, radius):
         """Draw moon icon."""
         col = imgui.get_color_u32_rgba(*self._theme.text_primary)
-        if not self._draw_icon_text(draw_list, cx, cy, radius * 2, self.ICON_MOON, col):
+        if self._icon_font:
+            self._draw_icon_text(draw_list, cx, cy, radius * 2, self.ICON_MOON, col)
+        else:
             bg_col = imgui.get_color_u32_rgba(*self._theme.background)
             draw_list.add_circle_filled(cx, cy, radius, col, 24)
             cut_offset = radius * 0.35
@@ -812,11 +896,13 @@ class PiVizStudio(mglw.WindowConfig):
 
         self.imgui_renderer.key_event(key, action, modifiers)
 
+        # Track pressed keys
         if action == self.wnd.keys.ACTION_PRESS:
             self._keys_pressed.add(key)
         elif action == self.wnd.keys.ACTION_RELEASE:
             self._keys_pressed.discard(key)
 
+        # Handle key presses
         if action == self.wnd.keys.ACTION_PRESS:
             if key == self.wnd.keys.G:
                 self.show_grid = not self.show_grid
@@ -833,6 +919,7 @@ class PiVizStudio(mglw.WindowConfig):
             elif key == self.wnd.keys.H:
                 self._fit_view_to_scene()
 
+        # Forward to scene
         if self.scene:
             self.scene.key_event(key, action, modifiers)
 
@@ -840,7 +927,9 @@ class PiVizStudio(mglw.WindowConfig):
         """Handle mouse position events."""
         if not hasattr(self, 'imgui_renderer'):
             return
+
         self.imgui_renderer.mouse_position_event(x, y, dx, dy)
+
         if not self.imgui_renderer.io.want_capture_mouse and self.scene:
             self.scene.mouse_position_event(x, y, dx, dy)
 
@@ -848,7 +937,9 @@ class PiVizStudio(mglw.WindowConfig):
         """Handle mouse drag events."""
         if not hasattr(self, 'imgui_renderer'):
             return
+
         self.imgui_renderer.mouse_drag_event(x, y, dx, dy)
+
         if not self.imgui_renderer.io.want_capture_mouse:
             self.camera.on_mouse_drag(x, y, dx, dy)
             if self.scene:
@@ -858,10 +949,12 @@ class PiVizStudio(mglw.WindowConfig):
         """Handle mouse scroll events."""
         if not hasattr(self, 'imgui_renderer'):
             return
+
         io = imgui.get_io()
         io.mouse_wheel = y_offset
         if hasattr(io, 'mouse_wheel_horizontal'):
             io.mouse_wheel_horizontal = x_offset
+
         if not io.want_capture_mouse:
             self.camera.on_mouse_scroll(x_offset, y_offset)
             if self.scene:
@@ -871,10 +964,32 @@ class PiVizStudio(mglw.WindowConfig):
         """Handle mouse press events."""
         if not hasattr(self, 'imgui_renderer'):
             return
+
         self.imgui_renderer.mouse_press_event(x, y, button)
+
         if not self.imgui_renderer.io.want_capture_mouse:
             mods = getattr(self.wnd, 'modifiers', 0)
-            self.camera.on_mouse_press(x, y, button, mods)
+
+            # Map buttons to 1, 2, 3
+            cam_btn = button  # Default to raw
+
+            if hasattr(self.wnd, 'mouse') and hasattr(self.wnd.mouse, 'LEFT'):
+                if button == self.wnd.mouse.LEFT:
+                    cam_btn = 1
+                elif button == self.wnd.mouse.RIGHT:
+                    cam_btn = 2
+                elif button == self.wnd.mouse.MIDDLE:
+                    cam_btn = 3
+            else:
+                # Fallback for raw Pyglet/X11
+                if button == 1:
+                    cam_btn = 1  # Left
+                elif button == 4:
+                    cam_btn = 2  # Right
+                elif button == 2:
+                    cam_btn = 3  # Middle
+
+            self.camera.on_mouse_press(x, y, cam_btn, mods)
             if self.scene:
                 self.scene.mouse_press_event(x, y, button)
 
@@ -882,7 +997,28 @@ class PiVizStudio(mglw.WindowConfig):
         """Handle mouse release events."""
         if not hasattr(self, 'imgui_renderer'):
             return
+
         self.imgui_renderer.mouse_release_event(x, y, button)
-        self.camera.on_mouse_release(x, y, button)
+
+        # Map buttons to 1, 2, 3
+        cam_btn = button  # Default to raw
+        if hasattr(self.wnd, 'mouse') and hasattr(self.wnd.mouse, 'LEFT'):
+            if button == self.wnd.mouse.LEFT:
+                cam_btn = 1
+            elif button == self.wnd.mouse.RIGHT:
+                cam_btn = 2
+            elif button == self.wnd.mouse.MIDDLE:
+                cam_btn = 3
+        else:
+            # Fallback
+            if button == 1:
+                cam_btn = 1
+            elif button == 4:
+                cam_btn = 2
+            elif button == 2:
+                cam_btn = 3
+
+        self.camera.on_mouse_release(x, y, cam_btn)
+
         if self.scene:
             self.scene.mouse_release_event(x, y, button)

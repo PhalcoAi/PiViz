@@ -30,6 +30,7 @@ from .core.studio import PiVizStudio
 from .core.scene import PiVizFX
 from .core.camera import Camera
 from .core.usd_player import USDPlayer
+from .core import wrapper
 
 from .ui.manager import UIManager
 from .ui.widgets import (
@@ -77,11 +78,39 @@ from .ui.widgets import (
     ProgressBar,
 )
 
+# Expose wrapper functions directly
+run = wrapper.run
+sphere = wrapper.sphere
+box = wrapper.box
+cylinder = wrapper.cylinder
+cone = wrapper.cone
+arrow = wrapper.arrow
+curve = wrapper.curve
+vec = wrapper.vec
+
+# Expose UI wrapper functions
+add_button = wrapper.add_button
+add_slider = wrapper.add_slider
+add_checkbox = wrapper.add_checkbox
+add_label = wrapper.add_label
+
 __all__ = [
     # Main classes
     'PiVizStudio',
     'PiVizFX',
     'pgfx',
+    'run',
+    'sphere',
+    'box',
+    'cylinder',
+    'cone',
+    'arrow',
+    'curve',
+    'vec',
+    'add_button',
+    'add_slider',
+    'add_checkbox',
+    'add_label',
 
     # Backward compatibility
     'PhalcoPulseStudio',

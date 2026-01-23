@@ -330,35 +330,35 @@ class StressTest(PiVizFX):
         self.ui_manager.set_panel_title("Stress Test Controls")
 
         y = 0
-        self.lbl_fps = Label((0, 0, 200, 20), "FPS: --", color=(0.3, 1.0, 0.4))
+        self.lbl_fps = Label("FPS: --", color=(0.3, 1.0, 0.4, 1.0))
         self.ui_manager.add_widget("fps", self.lbl_fps)
 
-        self.lbl_mode = Label((0, 0, 200, 20), f"Mode: {self.test_mode}", color=(1, 1, 1))
+        self.lbl_mode = Label(f"Mode: {self.test_mode}", color=(1, 1, 1, 1.0))
         self.ui_manager.add_widget("mode", self.lbl_mode)
 
-        self.lbl_objects = Label((0, 0, 200, 20), "Objects: --", color=(0.7, 0.7, 0.7))
+        self.lbl_objects = Label("Objects: --", color=(0.7, 0.7, 0.7, 1.0))
         self.ui_manager.add_widget("objects", self.lbl_objects)
 
-        self.lbl_drawcalls = Label((0, 0, 200, 20), "Draw calls: --", color=(0.7, 0.7, 0.7))
+        self.lbl_drawcalls = Label("Draw calls: --", color=(0.7, 0.7, 0.7, 1.0))
         self.ui_manager.add_widget("drawcalls", self.lbl_drawcalls)
 
         # Mode buttons
         for i in range(1, 7):
             self.ui_manager.add_widget(
                 f"btn_mode{i}",
-                Button((0, 0, 40, 25), f"M{i}", lambda m=i: self._set_mode(m))
+                Button(f"M{i}", lambda m=i: self._set_mode(m))
             )
 
         # Toggles
         self.ui_manager.add_widget(
             "chk_lines",
-            Checkbox((0, 0, 150, 20), "Use Lines (fast)", self.use_lines,
+            Checkbox("Use Lines (fast)", self.use_lines,
                      lambda v: setattr(self, 'use_lines', v))
         )
 
         self.ui_manager.add_widget(
             "chk_conn",
-            Checkbox((0, 0, 150, 20), "Show Connections", self.show_connections,
+            Checkbox("Show Connections", self.show_connections,
                      lambda v: setattr(self, 'show_connections', v))
         )
 
@@ -373,12 +373,12 @@ class StressTest(PiVizFX):
 
         self.ui_manager.add_widget(
             "sld_spheres",
-            Slider((0, 0, 150, 20), "Spheres", 10, 2000, self.sphere_count, set_spheres)
+            Slider("Spheres", 10, 2000, self.sphere_count, set_spheres)
         )
 
         self.ui_manager.add_widget(
             "sld_cylinders",
-            Slider((0, 0, 150, 20), "Connections", 10, 5000, self.cylinder_count, set_cylinders)
+            Slider("Connections", 10, 5000, self.cylinder_count, set_cylinders)
         )
 
     def _set_mode(self, mode):
@@ -486,7 +486,10 @@ class StressTest(PiVizFX):
                 v1 = (v1[0], v1[1], v1[2] + np.sin(time_val + v1[0] * 0.5) * 0.1)
                 v2 = (v2[0], v2[1], v2[2] + np.sin(time_val + v2[0] * 0.5) * 0.1)
                 v3 = (v3[0], v3[1], v3[2] + np.sin(time_val + v3[0] * 0.5) * 0.1)
-                pgfx.draw_triangle(v1, v2, v3, color)
+                
+                # Use draw_face for per-vertex coloring if needed, or draw_triangle for flat
+                # Here we use draw_face to test the new batching
+                pgfx.draw_face(v1, v2, v3, color, color, color)
 
         # Track performance
         frame_time = time.perf_counter() - frame_start
@@ -507,11 +510,11 @@ class StressTest(PiVizFX):
 
         # Color based on FPS
         if fps >= 55:
-            color = (0.3, 1.0, 0.4)  # Green
+            color = (0.3, 1.0, 0.4, 1.0)  # Green
         elif fps >= 30:
-            color = (1.0, 0.8, 0.2)  # Yellow
+            color = (1.0, 0.8, 0.2, 1.0)  # Yellow
         else:
-            color = (1.0, 0.3, 0.3)  # Red
+            color = (1.0, 0.3, 0.3, 1.0)  # Red
 
         self.lbl_fps.text = f"FPS: {fps:.1f} ({avg_time * 1000:.1f}ms)"
         self.lbl_fps.color = color

@@ -15,7 +15,6 @@ from dataclasses import dataclass
 @dataclass
 class WidgetBase:
     """Base class for all widgets."""
-    rect: Tuple[int, int, int, int]  # (x, y, width, height)
     visible: bool = True
     
     def render(self):
@@ -27,11 +26,9 @@ class Label(WidgetBase):
     """Text label widget."""
     
     def __init__(self, 
-                 rect: Tuple[int, int, int, int],
                  text: str = "",
                  align: str = 'left',
                  color: Optional[Tuple[float, float, float, float]] = None):
-        self.rect = rect
         self.text = text
         self.align = align
         self.color = color or (0.9, 0.9, 0.9, 1.0)
@@ -46,17 +43,15 @@ class Button(WidgetBase):
     """Clickable button widget."""
     
     def __init__(self,
-                 rect: Tuple[int, int, int, int],
                  text: str = "Button",
                  callback: Optional[Callable[[], None]] = None):
-        self.rect = rect
         self.text = text
         self.callback = callback
     
     def render(self):
         if not self.visible:
             return
-        if imgui.button(self.text, width=self.rect[2]):
+        if imgui.button(self.text):
             if self.callback:
                 self.callback()
 
@@ -65,13 +60,11 @@ class Slider(WidgetBase):
     """Value slider widget."""
     
     def __init__(self,
-                 rect: Tuple[int, int, int, int],
                  label: str = "Value",
                  min_val: float = 0.0,
                  max_val: float = 1.0,
                  initial_val: float = 0.5,
                  callback: Optional[Callable[[float], None]] = None):
-        self.rect = rect
         self.label = label
         self.min_val = min_val
         self.max_val = max_val
@@ -97,11 +90,9 @@ class Checkbox(WidgetBase):
     """Checkbox widget."""
     
     def __init__(self,
-                 rect: Tuple[int, int, int, int],
                  label: str = "Option",
                  is_checked: bool = False,
                  callback: Optional[Callable[[bool], None]] = None):
-        self.rect = rect
         self.label = label
         self.is_checked = is_checked
         self.callback = callback
@@ -120,11 +111,9 @@ class ToggleSwitch(WidgetBase):
     """Toggle switch widget (styled checkbox)."""
     
     def __init__(self,
-                 rect: Tuple[int, int, int, int],
                  is_on: bool = False,
                  callback: Optional[Callable[[bool], None]] = None,
                  label: str = ""):
-        self.rect = rect
         self.is_on = is_on
         self.callback = callback
         self.label = label
@@ -145,12 +134,10 @@ class TextInput(WidgetBase):
     """Text input field widget."""
     
     def __init__(self,
-                 rect: Tuple[int, int, int, int],
                  initial_text: str = "",
                  callback: Optional[Callable[[str], None]] = None,
                  label: str = "##input",
                  max_length: int = 256):
-        self.rect = rect
         self.text = initial_text
         self.callback = callback
         self.label = label
@@ -172,12 +159,10 @@ class Dropdown(WidgetBase):
     """Dropdown selection widget."""
     
     def __init__(self,
-                 rect: Tuple[int, int, int, int],
                  options: List[str],
                  selected_index: int = 0,
                  callback: Optional[Callable[[str], None]] = None,
                  label: str = "##dropdown"):
-        self.rect = rect
         self.options = options
         self.selected_index = selected_index
         self.callback = callback
@@ -207,12 +192,10 @@ class ProgressBar(WidgetBase):
     """Progress bar widget."""
     
     def __init__(self,
-                 rect: Tuple[int, int, int, int],
                  min_val: float = 0.0,
                  max_val: float = 100.0,
                  value: float = 0.0,
                  label: str = ""):
-        self.rect = rect
         self.min_val = min_val
         self.max_val = max_val
         self.value = value
@@ -224,7 +207,7 @@ class ProgressBar(WidgetBase):
         fraction = (self.value - self.min_val) / (self.max_val - self.min_val)
         fraction = max(0.0, min(1.0, fraction))
         overlay = self.label if self.label else f"{self.value:.0f}%"
-        imgui.progress_bar(fraction, (self.rect[2], self.rect[3]), overlay)
+        imgui.progress_bar(fraction, (0, 0), overlay)
     
     def set_value(self, value: float):
         self.value = value

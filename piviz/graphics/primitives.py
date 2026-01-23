@@ -17,7 +17,7 @@ Author: Yogesh Phalak
 import moderngl
 import numpy as np
 import math
-from typing import Tuple, Optional, Dict, List
+from typing import Tuple, Optional, Dict, List, Union
 from dataclasses import dataclass, field
 
 # ============================================================
@@ -35,6 +35,8 @@ _cube_queue: List[Tuple] = []
 _cylinder_queue: List[Tuple] = []
 _cone_queue: List[Tuple] = []
 _line_queue: List[Tuple] = []
+# Triangle queue stores: (v1, v2, v3, c1, c2, c3)
+# If c2/c3 are None, c1 is used for all vertices
 _triangle_queue: List[Tuple] = []
 
 # Cached geometry (created once, reused forever)
@@ -50,6 +52,10 @@ _line_buffer: Optional[moderngl.Buffer] = None
 _line_buffer_size: int = 0
 _triangle_buffer: Optional[moderngl.Buffer] = None
 _triangle_buffer_size: int = 0
+
+# VAO Cache to avoid per-frame object creation overhead
+# Keys: (type_id, detail_level) or just type_id
+_cached_vaos: Dict[str, moderngl.VertexArray] = {}
 
 # Bounds tracking
 _current_min = np.full(3, np.inf, dtype='f4')
@@ -137,6 +143,111 @@ def _get_program(name: str) -> moderngl.Program:
                         v_color = inst_color;
                         v_light_dir = light_dir;
                         gl_Position = projection * view * world_pos;
+                    }
+                ''',
+                fragment_shader='''
+                    #version 330
+                    uniform float shininess;
+                    uniform float specular_strength;
+                    uniform bool use_specular;
+                    uniform vec3 cam_pos;
+
+                    in vec3 v_normal;
+                    in vec3 v_position;
+                    in vec4 v_color;
+                    in vec3 v_light_dir;
+
+                    out vec4 frag_color;
+
+                    void main() {
+                        vec3 norm = normalize(v_normal);
+                        vec3 light = normalize(v_light_dir);
+
+                        float diff = max(dot(norm, light), 0.0);
+
+                        float spec = 0.0;
+                        if (use_specular && diff > 0.0) {
+                            vec3 view_dir = normalize(cam_pos - v_position);
+                            vec3 halfway = normalize(light + view_dir);
+                            spec = pow(max(dot(norm, halfway), 0.0), shininess);
+                        }
+
+                        float ambient = 0.3;
+                        vec3 result = v_color.rgb * (ambient + diff * 0.7);
+                        if (use_specular) {
+                            result += vec3(1.0) * spec * specular_strength;
+                        }
+
+                        frag_color = vec4(result, v_color.a);
+                    }
+                '''
+            )
+        
+        elif name == 'instanced_directional':
+            # Optimized shader for cylinders/cones defined by start/end points
+            # Calculates transform on GPU to save CPU time
+            _programs[name] = _ctx.program(
+                vertex_shader='''
+                    #version 330
+                    uniform mat4 view;
+                    uniform mat4 projection;
+                    uniform vec3 light_dir;
+
+                    in vec3 in_position;
+                    in vec3 in_normal;
+
+                    // Per-instance attributes
+                    in vec3 inst_start;
+                    in vec3 inst_end;
+                    in float inst_radius;
+                    in vec4 inst_color;
+
+                    out vec3 v_normal;
+                    out vec3 v_position;
+                    out vec4 v_color;
+                    out vec3 v_light_dir;
+
+                    mat3 make_rotation(vec3 direction) {
+                        vec3 z = normalize(direction);
+                        // Handle case where direction is parallel to up vector
+                        vec3 ref = abs(z.z) > 0.999 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.0, 1.0);
+                        vec3 x = normalize(cross(ref, z));
+                        vec3 y = cross(z, x);
+                        return mat3(x, y, z);
+                    }
+
+                    void main() {
+                        vec3 axis = inst_end - inst_start;
+                        float len = length(axis);
+                        
+                        // Avoid degenerate geometry
+                        if (len < 0.0001) {
+                            gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                            return;
+                        }
+
+                        mat3 rot = make_rotation(axis);
+                        
+                        // Scale: XY by radius, Z by length
+                        vec3 scaled_pos = in_position;
+                        scaled_pos.xy *= inst_radius;
+                        scaled_pos.z *= len;
+                        
+                        // Rotate and Translate
+                        vec3 world_pos = (rot * scaled_pos) + inst_start;
+                        
+                        v_position = world_pos;
+                        
+                        // Normal transformation
+                        // Scale normal by inverse scale factors to maintain orthogonality
+                        vec3 scaled_normal = in_normal;
+                        scaled_normal.xy /= inst_radius;
+                        scaled_normal.z /= len;
+                        v_normal = rot * normalize(scaled_normal);
+                        
+                        v_color = inst_color;
+                        v_light_dir = light_dir;
+                        gl_Position = projection * view * vec4(world_pos, 1.0);
                     }
                 ''',
                 fragment_shader='''
@@ -692,7 +803,8 @@ def draw_arrow(start, end, color=(1, 1, 1), head_size=0.1, head_radius=None, wid
 
 def draw_triangle(v1, v2, v3, color=(0.7, 0.7, 0.7)):
     """Queue a triangle for batched rendering."""
-    _triangle_queue.append((v1, v2, v3, _ensure_rgba(color)))
+    # Store as (v1, v2, v3, c1, None, None) to indicate uniform color
+    _triangle_queue.append((v1, v2, v3, _ensure_rgba(color), None, None))
     
     pts = np.array([v1, v2, v3], dtype='f4')
     _update_bounds(np.min(pts, axis=0), np.max(pts, axis=0))
@@ -746,31 +858,13 @@ def draw_point(position, color=(1, 1, 1), size=5.0):
 
 
 def draw_face(v1, v2, v3, c1=(1, 0, 0), c2=(0, 1, 0), c3=(0, 0, 1)):
-    """Draw a triangle with per-vertex colors (immediate mode)."""
-    global _ctx
-    if _ctx is None:
-        return
+    """Draw a triangle with per-vertex colors (batched)."""
+    # Store as (v1, v2, v3, c1, c2, c3)
+    _triangle_queue.append((v1, v2, v3, _ensure_rgba(c1), _ensure_rgba(c2), _ensure_rgba(c3)))
     
     # Update bounds
     pts = np.array([v1, v2, v3], dtype='f4')
     _update_bounds(np.min(pts, axis=0), np.max(pts, axis=0))
-    
-    # For now, render immediately - could be batched later
-    prog = _get_program('batched_lines')
-
-    # Corrected syntax here
-    c1, c2, c3 = _ensure_rgba(c1), _ensure_rgba(c2), _ensure_rgba(c3)
-
-    vertices = np.array([*v1, *c1, *v2, *c2, *v3, *c3], dtype='f4')
-    vbo = _ctx.buffer(vertices.tobytes())
-    vao = _ctx.vertex_array(prog, [(vbo, '3f 4f', 'in_position', 'in_color')])
-    prog['view'].write(_current_view.T.tobytes())
-    prog['projection'].write(_current_proj.T.tobytes())
-    _ctx.disable(moderngl.CULL_FACE)
-    vao.render(moderngl.TRIANGLES)
-    _ctx.enable(moderngl.CULL_FACE)
-    vbo.release()
-    vao.release()
 
 
 def draw_path(points, color=(1, 1, 1), width=1.0):
@@ -847,9 +941,13 @@ def _ensure_instance_buffer(needed_bytes: int):
         if _instance_buffer is not None:
             _instance_buffer.release()
         # Grow by 2x to avoid frequent reallocations
-        new_size = max(needed_bytes, _instance_buffer_size * 2, 1024 * 1024)  # Min 1MB
+        # Start with 4MB to reduce early churn
+        new_size = max(needed_bytes, _instance_buffer_size * 2, 4 * 1024 * 1024)
         _instance_buffer = _ctx.buffer(reserve=new_size)
         _instance_buffer_size = new_size
+        
+        # Invalidate VAO cache because buffer handle changed
+        _clear_vao_cache_for_buffer('instance')
 
 
 def _ensure_line_buffer(needed_bytes: int):
@@ -858,9 +956,12 @@ def _ensure_line_buffer(needed_bytes: int):
     if _line_buffer is None or _line_buffer_size < needed_bytes:
         if _line_buffer is not None:
             _line_buffer.release()
-        new_size = max(needed_bytes, _line_buffer_size * 2, 256 * 1024)  # Min 256KB
+        new_size = max(needed_bytes, _line_buffer_size * 2, 1024 * 1024)  # Min 1MB
         _line_buffer = _ctx.buffer(reserve=new_size)
         _line_buffer_size = new_size
+        
+        # Invalidate VAO cache
+        _clear_vao_cache_for_buffer('line')
 
 
 def _ensure_triangle_buffer(needed_bytes: int):
@@ -869,9 +970,46 @@ def _ensure_triangle_buffer(needed_bytes: int):
     if _triangle_buffer is None or _triangle_buffer_size < needed_bytes:
         if _triangle_buffer is not None:
             _triangle_buffer.release()
-        new_size = max(needed_bytes, _triangle_buffer_size * 2, 512 * 1024)  # Min 512KB
+        new_size = max(needed_bytes, _triangle_buffer_size * 2, 2 * 1024 * 1024)  # Min 2MB
         _triangle_buffer = _ctx.buffer(reserve=new_size)
         _triangle_buffer_size = new_size
+        
+        # Invalidate VAO cache
+        _clear_vao_cache_for_buffer('triangle')
+
+
+def _clear_vao_cache_for_buffer(buffer_type: str):
+    """Clear cached VAOs associated with a specific buffer type."""
+    global _cached_vaos
+    keys_to_remove = []
+    
+    for key in _cached_vaos:
+        # Key structure: (type_id, detail) or (type_id,)
+        # type_id is 'sphere', 'cube', 'cylinder', 'cone', 'lines', 'triangles'
+        type_id = key[0]
+        
+        if buffer_type == 'instance':
+            if type_id in ('sphere', 'cube', 'cylinder', 'cone'):
+                keys_to_remove.append(key)
+        elif buffer_type == 'line':
+            if type_id == 'lines':
+                keys_to_remove.append(key)
+        elif buffer_type == 'triangle':
+            if type_id == 'triangles':
+                keys_to_remove.append(key)
+                
+    for key in keys_to_remove:
+        if key in _cached_vaos:
+            _cached_vaos[key].release()
+            del _cached_vaos[key]
+
+
+def _get_cached_vao(key, create_fn):
+    """Get or create a cached VAO."""
+    global _cached_vaos
+    if key not in _cached_vaos:
+        _cached_vaos[key] = create_fn()
+    return _cached_vaos[key]
 
 
 def _render_instanced_shapes(queue: List, get_geometry_fn, shape_name: str):
@@ -880,7 +1018,10 @@ def _render_instanced_shapes(queue: List, get_geometry_fn, shape_name: str):
     if not queue:
         return
 
-    prog = _get_program('instanced_solid')
+    # Use optimized shader for cylinders and cones
+    use_directional_shader = shape_name in ('cylinder', 'cone')
+    prog_name = 'instanced_directional' if use_directional_shader else 'instanced_solid'
+    prog = _get_program(prog_name)
 
     # Group by detail level (for spheres/cylinders/cones)
     by_detail: Dict[int, List] = {}
@@ -892,48 +1033,76 @@ def _render_instanced_shapes(queue: List, get_geometry_fn, shape_name: str):
 
     for detail, items in by_detail.items():
         geo_vbo, vertex_count = get_geometry_fn(detail)
+        count = len(items)
 
-        # Build instance data: 4x4 matrix (16 floats) + RGBA color (4 floats) = 20 floats
-        instance_data = np.zeros((len(items), 20), dtype='f4')
+        if use_directional_shader:
+            # Optimized path for cylinders/cones: 11 floats per instance
+            # start(3), end(3), radius(1), color(4)
+            instance_data = np.zeros((count, 11), dtype='f4')
+            
+            # Fast vectorized copy if possible, or simple loop
+            # Since items is a list of tuples, we iterate
+            for i, (start, end, radius, color, _) in enumerate(items):
+                instance_data[i, 0:3] = start
+                instance_data[i, 3:6] = end
+                instance_data[i, 6] = radius
+                instance_data[i, 7:11] = color
+                
+            # Upload instance data
+            _ensure_instance_buffer(instance_data.nbytes)
+            _instance_buffer.write(instance_data.tobytes())
+            
+            # Get or create cached VAO
+            vao_key = (shape_name, detail)
+            
+            def create_vao():
+                return _ctx.vertex_array(prog, [
+                    (geo_vbo, '3f 3f', 'in_position', 'in_normal'),
+                    (_instance_buffer, '3f 3f 1f 4f/i', 'inst_start', 'inst_end', 'inst_radius', 'inst_color'),
+                ])
+                
+            vao = _get_cached_vao(vao_key, create_vao)
+            
+        else:
+            # Standard path for spheres/cubes: 20 floats per instance
+            # matrix(16), color(4)
+            instance_data = np.zeros((count, 20), dtype='f4')
 
-        for i, item in enumerate(items):
-            if shape_name == 'sphere':
-                center, radius, color, _ = item
-                m = _make_transform_matrix(center, (radius, radius, radius))
-            elif shape_name == 'cube':
-                center, size, color, rotation = item
-                # Apply rotation if non-zero
-                if any(r != 0 for r in rotation):
-                    rot_matrix = _make_rotation_matrix_xyz(rotation)
-                    # Scale then rotate
-                    scale_mat = np.diag(size).astype('f4')
-                    rot_scale = rot_matrix @ scale_mat
-                    m = np.eye(4, dtype='f4')
-                    m[:3, :3] = rot_scale
-                    m[0, 3], m[1, 3], m[2, 3] = center
+            for i, item in enumerate(items):
+                if shape_name == 'sphere':
+                    center, radius, color, _ = item
+                    m = _make_transform_matrix(center, (radius, radius, radius))
+                elif shape_name == 'cube':
+                    center, size, color, rotation = item
+                    if any(r != 0 for r in rotation):
+                        rot_matrix = _make_rotation_matrix_xyz(rotation)
+                        scale_mat = np.diag(size).astype('f4')
+                        rot_scale = rot_matrix @ scale_mat
+                        m = np.eye(4, dtype='f4')
+                        m[:3, :3] = rot_scale
+                        m[0, 3], m[1, 3], m[2, 3] = center
+                    else:
+                        m = _make_transform_matrix(center, size)
                 else:
-                    m = _make_transform_matrix(center, size)
-            elif shape_name == 'cylinder':
-                start, end, radius, color, _ = item
-                m = _cylinder_transform(start, end, radius)
-            elif shape_name == 'cone':
-                base, tip, radius, color, _ = item
-                m = _cone_transform(base, tip, radius)
-            else:
-                continue
+                    continue
 
-            instance_data[i, :16] = m.T.flatten()
-            instance_data[i, 16:20] = color
+                instance_data[i, :16] = m.T.flatten()
+                instance_data[i, 16:20] = color
 
-        # Upload instance data
-        _ensure_instance_buffer(instance_data.nbytes)
-        _instance_buffer.write(instance_data.tobytes())
+            # Upload instance data
+            _ensure_instance_buffer(instance_data.nbytes)
+            _instance_buffer.write(instance_data.tobytes())
 
-        # Create VAO
-        vao = _ctx.vertex_array(prog, [
-            (geo_vbo, '3f 3f', 'in_position', 'in_normal'),
-            (_instance_buffer, '4f 4f 4f 4f 4f/i', 'inst_row0', 'inst_row1', 'inst_row2', 'inst_row3', 'inst_color'),
-        ])
+            # Get or create cached VAO
+            vao_key = (shape_name, detail)
+            
+            def create_vao():
+                return _ctx.vertex_array(prog, [
+                    (geo_vbo, '3f 3f', 'in_position', 'in_normal'),
+                    (_instance_buffer, '4f 4f 4f 4f 4f/i', 'inst_row0', 'inst_row1', 'inst_row2', 'inst_row3', 'inst_color'),
+                ])
+                
+            vao = _get_cached_vao(vao_key, create_vao)
 
         # Set uniforms
         prog['view'].write(_current_view.T.tobytes())
@@ -950,7 +1119,6 @@ def _render_instanced_shapes(queue: List, get_geometry_fn, shape_name: str):
 
         # Render all instances in one call!
         vao.render(moderngl.TRIANGLES, instances=len(items))
-        vao.release()
 
 
 def _render_lines():
@@ -973,9 +1141,15 @@ def _render_lines():
     _ensure_line_buffer(vertex_data.nbytes)
     _line_buffer.write(vertex_data.tobytes())
 
-    vao = _ctx.vertex_array(prog, [
-        (_line_buffer, '3f 4f', 'in_position', 'in_color')
-    ])
+    # Get or create cached VAO
+    vao_key = ('lines',)
+    
+    def create_vao():
+        return _ctx.vertex_array(prog, [
+            (_line_buffer, '3f 4f', 'in_position', 'in_color')
+        ])
+        
+    vao = _get_cached_vao(vao_key, create_vao)
 
     prog['view'].write(_current_view.T.tobytes())
     prog['projection'].write(_current_proj.T.tobytes())
@@ -985,7 +1159,6 @@ def _render_lines():
     _ctx.line_width = avg_width
 
     vao.render(moderngl.LINES, vertices=len(_line_queue) * 2)
-    vao.release()
 
 
 def _render_triangles():
@@ -999,7 +1172,7 @@ def _render_triangles():
     # Build vertex data: 3 vertices per triangle, 7 floats each (pos3 + normal3 + color4)
     vertex_data = np.zeros((len(_triangle_queue) * 3, 10), dtype='f4')  # pos3 + normal3 + color4
 
-    for i, (v1, v2, v3, color) in enumerate(_triangle_queue):
+    for i, (v1, v2, v3, c1, c2, c3) in enumerate(_triangle_queue):
         v1, v2, v3 = np.array(v1, dtype='f4'), np.array(v2, dtype='f4'), np.array(v3, dtype='f4')
 
         # Calculate normal
@@ -1012,28 +1185,39 @@ def _render_triangles():
         else:
             norm = np.array([0, 0, 1], dtype='f4')
 
+        # If c2/c3 are None, use c1 for all vertices (uniform color)
+        if c2 is None:
+            c2 = c1
+            c3 = c1
+
         # Vertex 1
         vertex_data[i * 3, :3] = v1
         vertex_data[i * 3, 3:6] = norm
-        vertex_data[i * 3, 6:10] = color
+        vertex_data[i * 3, 6:10] = c1
 
         # Vertex 2
         vertex_data[i * 3 + 1, :3] = v2
         vertex_data[i * 3 + 1, 3:6] = norm
-        vertex_data[i * 3 + 1, 6:10] = color
+        vertex_data[i * 3 + 1, 6:10] = c2
 
         # Vertex 3
         vertex_data[i * 3 + 2, :3] = v3
         vertex_data[i * 3 + 2, 3:6] = norm
-        vertex_data[i * 3 + 2, 6:10] = color
+        vertex_data[i * 3 + 2, 6:10] = c3
 
     # Use persistent buffer
     _ensure_triangle_buffer(vertex_data.nbytes)
     _triangle_buffer.write(vertex_data.tobytes())
 
-    vao = _ctx.vertex_array(prog, [
-        (_triangle_buffer, '3f 3f 4f', 'in_position', 'in_normal', 'in_color')
-    ])
+    # Get or create cached VAO
+    vao_key = ('triangles',)
+    
+    def create_vao():
+        return _ctx.vertex_array(prog, [
+            (_triangle_buffer, '3f 3f 4f', 'in_position', 'in_normal', 'in_color')
+        ])
+        
+    vao = _get_cached_vao(vao_key, create_vao)
 
     prog['view'].write(_current_view.T.tobytes())
     prog['projection'].write(_current_proj.T.tobytes())
@@ -1050,7 +1234,6 @@ def _render_triangles():
     _ctx.disable(moderngl.CULL_FACE)
     vao.render(moderngl.TRIANGLES, vertices=len(_triangle_queue) * 3)
     _ctx.enable(moderngl.CULL_FACE)
-    vao.release()
 
 
 # Keep the old function as fallback but it won't be used
@@ -1108,7 +1291,16 @@ def flush_all():
 def clear_cache():
     """Clear all cached geometry (call on context recreation)."""
     global _cached_sphere_vbo, _cached_cube_vbo, _cached_unit_cylinder_vbo, _cached_cone_vbo
-    global _instance_buffer, _line_buffer
+    global _instance_buffer, _line_buffer, _cached_vaos
+    
+    # Clear VAO cache
+    for vao in _cached_vaos.values():
+        try:
+            vao.release()
+        except:
+            pass
+    _cached_vaos.clear()
+
     for vbo, _ in _cached_sphere_vbo.values():
         try:
             vbo.release()

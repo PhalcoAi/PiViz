@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "piviz-3d"
-version = "1.0.2"
+version = "2.0.0"
 description = "Modern GPU-accelerated 3D visualization framework for scientific computing"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -21,7 +21,7 @@ keywords = [
     "simulation",
     "gpu",
     "usd",
-    "physics",
+    "physics"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -46,8 +46,9 @@ dependencies = [
     "numpy>=1.20.0",
     "psutil>=5.8.0",
     "imageio[ffmpeg]>=2.30.0",
-    "usd-core>=23.08; platform_machine != 'aarch64'", # USD core usually has issues on some ARM/Apple Silicon via pip currently, but generally available
+    "usd-core>=23.08; platform_machine != 'aarch64'",
     "GPUtil>=1.4.0",
+    "screeninfo>=0.8.1"
 ]
 
 [project.optional-dependencies]

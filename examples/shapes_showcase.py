@@ -108,24 +108,24 @@ class ShapesShowcase(PiVizFX):
 
         self.ui_manager.set_panel_title("Shapes Showcase")
 
-        self.lbl_section = Label((0, 0, 200, 20), "Section: All Shapes", color=(1, 1, 1))
+        self.lbl_section = Label("Section: All Shapes", color=(1, 1, 1, 1.0))
         self.ui_manager.add_widget("section", self.lbl_section)
 
         # Section buttons
-        self.ui_manager.add_widget("btn_all", Button((0, 0, 60, 25), "All", lambda: self._set_section(0)))
-        self.ui_manager.add_widget("btn_s1", Button((0, 0, 60, 25), "Solids", lambda: self._set_section(1)))
-        self.ui_manager.add_widget("btn_s2", Button((0, 0, 60, 25), "Flat", lambda: self._set_section(2)))
-        self.ui_manager.add_widget("btn_s3", Button((0, 0, 60, 25), "Lines", lambda: self._set_section(3)))
-        self.ui_manager.add_widget("btn_s4", Button((0, 0, 60, 25), "Batch", lambda: self._set_section(4)))
+        self.ui_manager.add_widget("btn_all", Button("All", lambda: self._set_section(0)))
+        self.ui_manager.add_widget("btn_s1", Button("Solids", lambda: self._set_section(1)))
+        self.ui_manager.add_widget("btn_s2", Button("Flat", lambda: self._set_section(2)))
+        self.ui_manager.add_widget("btn_s3", Button("Lines", lambda: self._set_section(3)))
+        self.ui_manager.add_widget("btn_s4", Button("Batch", lambda: self._set_section(4)))
 
         # Options
         self.ui_manager.add_widget(
             "chk_shiny",
-            Checkbox((0, 0, 150, 20), "Shiny Materials", self.use_shiny, self._toggle_shiny)
+            Checkbox("Shiny Materials", self.use_shiny, self._toggle_shiny)
         )
         self.ui_manager.add_widget(
             "chk_animate",
-            Checkbox((0, 0, 150, 20), "Animate", self.animate, lambda v: setattr(self, 'animate', v))
+            Checkbox("Animate", self.animate, lambda v: setattr(self, 'animate', v))
         )
 
     def _set_section(self, section):

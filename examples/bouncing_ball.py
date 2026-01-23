@@ -1,48 +1,68 @@
-# examples/bouncing_ball.py
+"""
+Bouncing Ball Simulation (VPython-style)
+========================================
 
-from piviz import PiVizStudio, PiVizFX, pgfx, Colors, Palette
+A simple physics simulation using the script-like wrapper.
+"""
+
+import piviz as pz
+
+# Simulation state
+ball_pos = [0, 0, 0]
+ball_vel = [0, 0, 0]
+gravity = -9.8
+radius = 0.5
+floor_z = -2.0
+is_running = True
 
 
-class BouncingBall(PiVizFX):
-    """A simple bouncing ball physics demo."""
+def toggle_simulation():
+    global is_running
+    is_running = not is_running
 
-    def setup(self):
-        self.position = 3.0  # Initial height
-        self.velocity = 0.0  # Initial velocity
-        self.gravity = -9.8  # Gravity acceleration
-        self.restitution = 0.85  # Bounce coefficient
-        self.ball_radius = 0.5
 
-        # Use academic palette colors
-        self.ball_color = Palette.Standard10[0]  # Academic Blue
-        self.ground_color = Colors.GREY
+def reset_ball():
+    global ball_pos, ball_vel
+    ball_pos = [0, 0, 0]
+    ball_vel = [0, 0, 0]
 
-    def render(self, time, dt):
-        # Update physics
-        self.velocity += self.gravity * dt
-        self.position += self.velocity * dt
 
-        # Bounce off ground
-        if self.position < self.ball_radius:
-            self.position = self.ball_radius
-            self.velocity = -self.velocity * self.restitution
+def set_gravity(value):
+    global gravity
+    gravity = -value
 
-        # Draw ground plane
-        pgfx.draw_plane(
-            size=(8, 8),
-            color=self.ground_color,
-            center=(0, 0, 0)
-        )
 
-        # Draw ball
-        pgfx.draw_sphere(
-            radius=self.ball_radius,
-            color=self.ball_color,
-            center=(0, 0, self.position),
-            detail=24
-        )
+def setup():
+    """Called once at startup."""
+    print("Starting simulation...")
+    pz.add_button("Start/Stop", toggle_simulation)
+    pz.add_button("Reset", reset_ball)
+    pz.add_slider("Gravity", 1.0, 20.0, 9.8, set_gravity)
+
+
+def update(dt):
+    """Called every frame."""
+    global ball_pos, ball_vel
+
+    if is_running:
+        # Physics update
+        ball_vel[2] += gravity * dt
+        ball_pos[0] += ball_vel[0] * dt
+        ball_pos[1] += ball_vel[1] * dt
+        ball_pos[2] += ball_vel[2] * dt
+
+        # Bounce
+        if ball_pos[2] - radius < floor_z:
+            ball_pos[2] = floor_z + radius
+            ball_vel[2] = -ball_vel[2] * 0.8  # Damping
+
+    # Draw scene
+    # Floor
+    pz.box(pos=(0, 0, floor_z - 0.1), size=(10, 10, 0.2), color=(0.3, 0.3, 0.3))
+
+    # Ball
+    pz.sphere(pos=tuple(ball_pos), radius=radius, color=(1, 0.2, 0.2))
 
 
 if __name__ == '__main__':
-    studio = PiVizStudio(scene_fx=BouncingBall())
-    studio.run()
+    pz.run(setup, update)

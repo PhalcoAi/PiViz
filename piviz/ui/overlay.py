@@ -77,6 +77,11 @@ class PiVizOverlay:
         # Graph update interval (don't update every frame)
         self._graph_update_interval = 0.1  # 10 Hz
 
+        # Cache for panel dimensions
+        self._system_panel_width = None  # Will be calculated on first render
+        self._system_panel_needs_remeasure = True
+        self._last_gpu_name = ""
+
         # Cached values
         self._cpu_percent = 0.0
         self._ram_used_gb = 0.0
@@ -105,6 +110,7 @@ class PiVizOverlay:
     def set_scale(self, scale: float):
         """Update UI scale factor."""
         self.scale = scale
+        self._system_panel_needs_remeasure = True  # Remeasure on scale change
 
     def _detect_gpu(self):
         """Detect GPU on startup."""
@@ -209,28 +215,104 @@ class PiVizOverlay:
         imgui.pop_style_color()
 
     def _draw_system_panel(self, io, accent, text_dim):
-        """Draw system resources panel."""
-        base_width = 205
-        name_width = imgui.calc_text_size(self._gpu_name).x + 50
-        panel_width = max(base_width, name_width) * self.scale
+        """Draw system resources panel with proper right alignment and dynamic width."""
         padding = 50 * self.scale
+        text_primary = self._theme.text_primary
 
-        imgui.set_next_window_position(io.display_size.x - panel_width - 15 * self.scale, padding)
-        imgui.set_next_window_size(panel_width, 0)
+        # Force measurement on first render or when needed
+        needs_measure = (
+                self._system_panel_width is None or  # First render
+                self._system_panel_needs_remeasure or
+                self._last_gpu_name != self._gpu_name
+        )
 
-        flags = (imgui.WINDOW_NO_DECORATION |
-                 imgui.WINDOW_NO_MOVE |
-                 imgui.WINDOW_ALWAYS_AUTO_RESIZE)
+        if needs_measure:
+            self._system_panel_needs_remeasure = False
+            self._last_gpu_name = self._gpu_name
 
-        # Add semi-transparent background for readability
+            # === MEASUREMENT PASS ===
+            imgui.set_next_window_position(-1000, -1000)
+            imgui.set_next_window_bg_alpha(0.0)
+
+            measure_flags = (
+                    imgui.WINDOW_NO_DECORATION |
+                    imgui.WINDOW_NO_INPUTS |
+                    imgui.WINDOW_ALWAYS_AUTO_RESIZE
+            )
+
+            imgui.begin("##system_measure", flags=measure_flags)
+
+            # Render content to measure (with maximum expected values)
+            imgui.text_colored("SYSTEM", accent[0], accent[1], accent[2], 1.0)
+            imgui.spacing()
+
+            imgui.text_colored("CPU", text_dim[0], text_dim[1], text_dim[2], 1.0)
+            imgui.same_line(spacing=8 * self.scale)
+            imgui.text_colored("100%", *text_primary)
+            imgui.same_line(spacing=15 * self.scale)
+            imgui.text_colored("RAM", text_dim[0], text_dim[1], text_dim[2], 1.0)
+            imgui.same_line(spacing=8 * self.scale)
+            imgui.text_colored("99.9GB", *text_primary)
+
+            if HAS_GPU_UTIL and self._gpu_name != "N/A":
+                imgui.spacing()
+                imgui.separator()
+                imgui.spacing()
+                imgui.text_colored("GPU", accent[0], accent[1], accent[2], 1.0)
+
+                # Measure GPU name width
+                imgui.push_text_wrap_pos(0)  # No wrapping for measurement
+                imgui.text(self._gpu_name)
+                imgui.pop_text_wrap_pos()
+
+                imgui.spacing()
+
+                # Measure status line
+                imgui.text_colored("Load", text_dim[0], text_dim[1], text_dim[2], 1.0)
+                imgui.same_line(spacing=5 * self.scale)
+                imgui.text_colored("100%", *text_primary)
+                imgui.same_line(spacing=12 * self.scale)
+                imgui.text_colored("Temp", text_dim[0], text_dim[1], text_dim[2], 1.0)
+                imgui.same_line(spacing=5 * self.scale)
+                imgui.text_colored("100°C", *text_primary)
+
+            # Get measured width
+            measured = imgui.get_window_width()
+
+            # Set width with minimum constraint
+            min_width = 350 * self.scale
+            # Use measured width directly if it's reasonable, otherwise clamp
+            # The issue was likely that 'measured' was too large initially or accumulating
+            self._system_panel_width = max(min_width, min(measured, 350 * self.scale))
+
+            imgui.end()
+
+        # If width is still None (shouldn't happen), use default
+        if self._system_panel_width is None:
+            self._system_panel_width = 350 * self.scale
+
+        # === VISIBLE RENDER PASS ===
+        graph_width = self._system_panel_width - 24 * self.scale
+
+        x_pos = io.display_size.x - self._system_panel_width - 15 * self.scale
+        y_pos = padding
+
+        imgui.set_next_window_position(x_pos, y_pos)
+        imgui.set_next_window_size(self._system_panel_width, 0)  # Force width
+
+        visible_flags = (
+                imgui.WINDOW_NO_DECORATION |
+                imgui.WINDOW_NO_MOVE |
+                imgui.WINDOW_ALWAYS_AUTO_RESIZE
+        )
+
         imgui.push_style_color(imgui.COLOR_WINDOW_BACKGROUND, *self._theme.panel)
         imgui.push_style_var(imgui.STYLE_WINDOW_ROUNDING, 8.0)
         imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (12 * self.scale, 10 * self.scale))
 
-        imgui.begin("##system", flags=flags)
+        imgui.begin("##system", flags=visible_flags)
 
-        text_primary = self._theme.text_primary
-
+        # Render actual content
         imgui.text_colored("SYSTEM", accent[0], accent[1], accent[2], 1.0)
         imgui.spacing()
 
@@ -247,7 +329,6 @@ class PiVizOverlay:
         imgui.text_colored(f"{self._ram_used_gb:.1f}GB", *text_primary)
 
         # CPU graph
-        graph_width = panel_width - 24 * self.scale
         imgui.plot_lines("##cpu_graph", self.cpu_history,
                          scale_min=0, scale_max=100,
                          graph_size=(graph_width, 25 * self.scale))
@@ -259,8 +340,10 @@ class PiVizOverlay:
             imgui.spacing()
 
             imgui.text_colored("GPU", accent[0], accent[1], accent[2], 1.0)
-            imgui.same_line(spacing=8 * self.scale)
+
+            imgui.push_text_wrap_pos(self._system_panel_width - 24 * self.scale)
             imgui.text_colored(self._gpu_name, text_dim[0], text_dim[1], text_dim[2], 1.0)
+            imgui.pop_text_wrap_pos()
             imgui.spacing()
 
             # Load & Temp

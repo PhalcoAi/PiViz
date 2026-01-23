@@ -19,7 +19,7 @@ class UIShowcase(PiVizFX):
     Showcase of all UI widgets with interactive elements.
     """
 
-    def setup(self, ui_manager):
+    def setup(self):
         # --- State Variables ---
         self.is_rotating = True
         self.rotation_speed = np.pi / 4
@@ -30,47 +30,44 @@ class UIShowcase(PiVizFX):
         self.mouse_y = 0
 
         # --- Sidebar Controls ---
-        ui_manager.set_panel_title("Interactive Demo")
+        if not self.ui_manager:
+            return
+
+        self.ui_manager.set_panel_title("Interactive Demo")
 
         # 1. Telemetry Section
-        ui_manager.add_widget("lbl_telemetry", Label(
-            rect=(0, 0, 200, 20),
+        self.ui_manager.add_widget("lbl_telemetry", Label(
             text="TELEMETRY",
             color=(1.0, 0.6, 0.2, 1.0)  # Orange header
         ))
 
         # Mouse Tracker (This label will update in real-time)
-        self.lbl_mouse = ui_manager.add_widget("mouse_pos", Label(
-            rect=(0, 0, 200, 20),
+        self.lbl_mouse = self.ui_manager.add_widget("mouse_pos", Label(
             text="Mouse: (0, 0)",
             color=(0.7, 0.7, 0.7, 1.0)
         ))
 
         # Rotation Tracker
-        self.lbl_rot = ui_manager.add_widget("rot_val", Label(
-            rect=(0, 0, 200, 20),
+        self.lbl_rot = self.ui_manager.add_widget("rot_val", Label(
             text="Rotation: 0.0°",
             color=(0.7, 0.7, 0.7, 1.0)
         ))
 
         # 2. Controls Section
-        ui_manager.add_widget("spacer1", Label((0, 0, 0, 10), ""))  # Spacer
+        self.ui_manager.add_widget("spacer1", Label(""))  # Spacer
 
-        ui_manager.add_widget("lbl_controls", Label(
-            rect=(0, 0, 200, 20),
+        self.ui_manager.add_widget("lbl_controls", Label(
             text="CONTROLS",
             color=(0.2, 0.8, 1.0, 1.0)  # Blue header
         ))
 
-        ui_manager.add_widget("rotate_toggle", ToggleSwitch(
-            rect=(0, 0, 50, 25),
+        self.ui_manager.add_widget("rotate_toggle", ToggleSwitch(
             is_on=self.is_rotating,
             callback=lambda v: setattr(self, 'is_rotating', v),
             label="Auto-Rotate"
         ))
 
-        ui_manager.add_widget("speed_slider", Slider(
-            rect=(0, 0, 200, 20),
+        self.ui_manager.add_widget("speed_slider", Slider(
             label="Speed",
             min_val=0, max_val=np.pi,
             initial_val=self.rotation_speed,
@@ -78,8 +75,7 @@ class UIShowcase(PiVizFX):
         ))
 
         # Scale slider
-        ui_manager.add_widget("scale_slider", Slider(
-            rect=(0, 0, 200, 20),
+        self.ui_manager.add_widget("scale_slider", Slider(
             label="Scale",
             min_val=0.5, max_val=2.5,
             initial_val=self.cube_scale,
@@ -94,8 +90,7 @@ class UIShowcase(PiVizFX):
             "Ruby": (0.9, 0.2, 0.2),
             "Amethyst": (0.6, 0.2, 0.8),
         }
-        ui_manager.add_widget("color_dropdown", Dropdown(
-            rect=(0, 0, 150, 25),
+        self.ui_manager.add_widget("color_dropdown", Dropdown(
             options=list(self.color_options.keys()),
             selected_index=0,
             callback=self._on_color_change,
@@ -103,8 +98,7 @@ class UIShowcase(PiVizFX):
         ))
 
         # Reset button
-        ui_manager.add_widget("reset_button", Button(
-            rect=(0, 0, 100, 30),
+        self.ui_manager.add_widget("reset_button", Button(
             text="Reset View",
             callback=self._reset
         ))
