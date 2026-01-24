@@ -119,13 +119,6 @@ class PiVizStudio(mglw.WindowConfig):
 
         # --- UI SCALE ---
         self.ui_scale = 1.0
-        env_scale = os.environ.get('PIVIZ_UI_SCALE')
-        if env_scale:
-            try:
-                self.ui_scale = float(env_scale)
-                print(f"[UI Scale] Manual override: {self.ui_scale}")
-            except ValueError:
-                pass
 
         # --- CAMERA ---
         self.camera = Camera()
@@ -163,6 +156,15 @@ class PiVizStudio(mglw.WindowConfig):
 
         # --- INITIALIZE UI SCALE ---
         self._update_ui_scale(*self.wnd.size)
+        env_scale = os.environ.get('PIVIZ_UI_SCALE')
+        if env_scale:
+            try:
+                self.ui_scale = float(env_scale)
+                imgui.get_io().font_global_scale = self.ui_scale
+                self.overlay.set_scale(self.ui_scale)
+                print(f"[UI Scale] Manual override: {self.ui_scale}")
+            except ValueError:
+                pass
 
         # --- SCENE INITIALIZATION ---
         self.scene: Optional[PiVizFX] = None
@@ -232,8 +234,6 @@ class PiVizStudio(mglw.WindowConfig):
         if getattr(PiVizStudio, '_banner_printed', False):
             return
         PiVizStudio._banner_printed = True
-
-
 
         # --- Configuration ---
         WIDTH = 78
@@ -323,7 +323,7 @@ class PiVizStudio(mglw.WindowConfig):
             # 96 DPI = 1.0 scale (standard)
             # 144 DPI = 1.5 scale (high-DPI laptop)
             # 192 DPI = 2.0 scale (4K monitor)
-            base_dpi = 96.0
+            base_dpi = 192
             self.ui_scale = monitor_info['dpi'] / base_dpi
 
             # Clamp to reasonable range
@@ -527,9 +527,6 @@ class PiVizStudio(mglw.WindowConfig):
     def _delayed_resize(self, width, height):
         """Execute heavy resize operations after dragging stops."""
         self._is_resizing = False
-
-        # Update UI scale
-        self._update_ui_scale(width, height)
 
         # Resize exporter (reallocates GPU buffers)
         self.exporter.resize(width, height)
