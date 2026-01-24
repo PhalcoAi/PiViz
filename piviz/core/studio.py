@@ -285,7 +285,7 @@ class PiVizStudio(mglw.WindowConfig):
         print_border(top=True)
 
         # Header
-        header = f"{ACCENT_COLOR}πViz Studio {LABEL_COLOR}v1.0.1{RESET}   {TITLE_COLOR}Interactive 3D Engine{RESET}"
+        header = f"{ACCENT_COLOR}πViz Studio {LABEL_COLOR}v2.0.1{RESET}   {TITLE_COLOR}Interactive 3D Engine{RESET}"
         print_line(header)
 
         print_border(middle=True)
