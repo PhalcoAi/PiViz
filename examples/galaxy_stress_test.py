@@ -39,9 +39,9 @@ class GalaxySimulation(PiVizFX):
         # 3. Setup UI
         if self.ui_manager:
             self.ui_manager.set_panel_title("Galaxy Stats")
-            self.ui_manager.add_widget("l_stars", Label((0, 0, 0, 0), f"Stars: {self.num_stars:,}", color=Colors.WHITE))
-            self.ui_manager.add_widget("l_dust", Label((0, 0, 0, 0), f"Dust: {self.num_dust:,}", color=Colors.GREY))
-            self.lbl_status = Label((0, 0, 0, 0), "Status: Init", color=Colors.GREEN)
+            self.ui_manager.add_widget("l_stars", Label(f"Stars: {self.num_stars:,}", color=Colors.WHITE))
+            self.ui_manager.add_widget("l_dust", Label(f"Dust: {self.num_dust:,}", color=Colors.GREY))
+            self.lbl_status = Label("Status: Init", color=Colors.GREEN)
             self.ui_manager.add_widget("l_status", self.lbl_status)
 
         if self.camera:
