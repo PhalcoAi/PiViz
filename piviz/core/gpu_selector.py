@@ -21,6 +21,21 @@ C_RED = "\033[91m"
 C_RESET = "\033[0m"
 
 
+def visible_len(s):
+    """Returns length of string ignoring ANSI color codes."""
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return len(ansi_escape.sub('', s))
+
+
+def print_boxed(content, color=C_BLUE, width=60):
+    """Prints a single line wrapped in a box with auto-alignment."""
+    print(f"\n{color}╔{'═' * (width - 2)}╗{C_RESET}")
+    v_len = visible_len(content)
+    padding = max(0, width - 4 - v_len)
+    print(f"{color}║ {C_RESET}{content}{' ' * padding} {color}║{C_RESET}")
+    print(f"{color}╚{'═' * (width - 2)}╝{C_RESET}")
+
+
 def get_available_gpus() -> List[dict]:
     """Detect available GPUs on the system."""
     gpus = []
@@ -104,107 +119,113 @@ def set_amd_offload_env():
     os.environ['DRI_PRIME'] = '1'
 
 
+def probe_default_renderer() -> dict:
+    """
+    Spawns a clean subprocess to check what GPU executes by default.
+    Crucial to avoid overriding a system that is already correct.
+    """
+    code = (
+        "import moderngl; "
+        "ctx=moderngl.create_context(standalone=True); "
+        "print(ctx.info['GL_VENDOR']); "
+        "print(ctx.info['GL_RENDERER'])"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, '-c', code],
+            capture_output=True, text=True, timeout=5,
+            env=os.environ.copy()  # Explicit: use current env
+        )
+        if result.returncode == 0:
+            lines = result.stdout.strip().split('\n')
+            if len(lines) >= 2:
+                return {'vendor': lines[0].strip(), 'renderer': lines[1].strip()}
+    except Exception:
+        pass
+
+    return {'vendor': 'Unknown', 'renderer': 'Unknown'}
+
+
 def auto_select_gpu(verbose: bool = True) -> dict:
     """
-    Automatically select the best available GPU.
+    Main Logic:
+    1. Probe what GPU is running by default
+    2. If already NVIDIA → Do nothing (avoid breaking working systems)
+    3. If NVIDIA hardware exists but not active → Force offload
+    4. Same logic for AMD
+    5. Otherwise → Use system default
     """
     result = {
-        'selected_gpu': None, 'method': None,
-        'env_vars_set': [], 'available_gpus': []
+        'selected_gpu': None,
+        'method': 'unknown',
+        'env_vars_set': [],
+        'available_gpus': []
     }
 
     gpus = get_available_gpus()
     result['available_gpus'] = gpus
 
-    # --- Shared Colors ---
-    C_BLUE = "\033[94m"
-    C_GREEN = "\033[92m"
-    C_GREY = "\033[90m"
-    C_RESET = "\033[0m"
-    C_RED = "\033[91m"
-    C_YELLOW = "\033[93m"
-
-    # --- Formatting Helpers ---
-    def visible_len(s):
-        """Returns length of string ignoring ANSI color codes."""
-        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-        return len(ansi_escape.sub('', s))
-
-    def print_boxed(content, color=C_BLUE, width=60):
-        """Prints a single line wrapped in a box with auto-alignment."""
-        # Top Border
-        print(f"\n{color}╔{'═' * (width - 2)}╗{C_RESET}")
-
-        # Content Line
-        v_len = visible_len(content)
-        padding = width - 4 - v_len
-        # Safety check to prevent negative padding if content is too long
-        if padding < 0:
-            padding = 0
-
-        print(f"{color}║ {C_RESET}{content}{' ' * padding} {color}║{C_RESET}")
-
-        # Bottom Border
-        print(f"{color}╚{'═' * (width - 2)}╝{C_RESET}")
-
-    # Print Header
     if verbose:
-        print_boxed(f"{C_GREEN}GPU Auto-Select{C_RESET} {C_GREY}(Scanning devices...){C_RESET}")
+        print_boxed(f"{C_GREEN}GPU Auto-Select{C_RESET} {C_GREY}(Smart Detection){C_RESET}")
 
+    # 1. Hardware Scan
     if not gpus:
         if verbose:
             print(f" {C_GREY}► Status:{C_RESET}   {C_RED}No GPUs detected{C_RESET}")
         return result
 
-    # Sort
-    gpus.sort(key=lambda g: g['priority'], reverse=True)
+    has_nvidia_hw = any(g['vendor'] == 'nvidia' for g in gpus)
+    has_amd_hw = any(g['vendor'] == 'amd' and g['type'] == 'discrete' for g in gpus)
 
     if verbose:
         for g in gpus:
             print(f" {C_GREY}► Found:{C_RESET}   {g['name']}")
 
-    # Logic
-    best_gpu = gpus[0]
-    result['selected_gpu'] = best_gpu
+    # 2. Runtime Probe - What's actually being used?
+    default_renderer = probe_default_renderer()
+    print("Default Renderer:", default_renderer)
+    default_vendor = default_renderer['vendor'].lower()
 
-    has_nvidia = any(g['vendor'] == 'nvidia' for g in gpus)
-    has_amd = any(g['vendor'] == 'amd' and g['type'] == 'discrete' for g in gpus)
-    has_intel = any(g['vendor'] == 'intel' for g in gpus)
+    is_already_nvidia = 'nvidia' in default_vendor
+    is_already_amd = 'amd' in default_vendor or 'ati' in default_vendor
 
-    if verbose and best_gpu:
-        print(f" {C_GREY}► Best :{C_RESET}   {best_gpu['name']}")
-    else:
-        if verbose:
-            print(f" {C_GREY}► Best :{C_RESET}   {C_RED}No suitable GPU found{C_RESET}")
-        return result
+    # 3. Decision Logic
+    if is_already_nvidia:
+        # System already using NVIDIA - don't touch it
+        result['method'] = 'native_default'
+        result['selected_gpu'] = next((g for g in gpus if g['vendor'] == 'nvidia'), None)
+        status_msg = "NVIDIA (Native)"
 
-    if has_nvidia and (has_intel or len(gpus) > 1):
-        if get_current_prime_profile() == 'nvidia':
-            result['method'] = 'prime-select'
-            status_msg = "NVIDIA (Prime Active)"
-        else:
-            set_nvidia_offload_env()
-            result['env_vars_set'] = ['__NV_PRIME_RENDER_OFFLOAD']
-            result['method'] = 'offload'
-            status_msg = "NVIDIA (Env Offload)"
+    elif has_nvidia_hw:
+        # NVIDIA exists but not active - force it
+        set_nvidia_offload_env()
+        result['method'] = 'forced_offload'
+        result['env_vars_set'] = ['__NV_PRIME_RENDER_OFFLOAD', '__GLX_VENDOR_LIBRARY_NAME']
+        result['selected_gpu'] = next((g for g in gpus if g['vendor'] == 'nvidia'), None)
+        status_msg = "NVIDIA (Offload Enabled)"
 
-    elif has_amd and has_intel:
+    elif is_already_amd:
+        # AMD already active - don't touch it
+        result['method'] = 'native_default'
+        result['selected_gpu'] = next((g for g in gpus if g['vendor'] == 'amd'), None)
+        status_msg = "AMD (Native)"
+
+    elif has_amd_hw:
+        # AMD exists but not active - force it
         set_amd_offload_env()
+        result['method'] = 'forced_offload'
         result['env_vars_set'] = ['DRI_PRIME']
-        result['method'] = 'offload'
-        status_msg = "AMD (DRI_PRIME)"
-
-    elif has_nvidia:
-        result['method'] = 'default'
-        status_msg = "NVIDIA (Default)"
+        result['selected_gpu'] = next((g for g in gpus if g['vendor'] == 'amd'), None)
+        status_msg = "AMD (DRI_PRIME Enabled)"
 
     else:
-        result['method'] = 'default'
-        status_msg = f"{best_gpu['vendor'].capitalize()} (Default)"
+        # Use whatever is running
+        result['method'] = 'system_default'
+        status_msg = f"{default_renderer['vendor']} (System Default)"
 
     if verbose:
-        print(f" {C_GREY}► Select:{C_RESET}   {C_GREEN}{status_msg}{C_RESET}")
-        print(f"\n")
+        print(f" {C_GREY}► Probe :{C_RESET}   {default_renderer['renderer']}")
+        print(f" {C_GREY}► Action:{C_RESET}   {C_GREEN}{status_msg}{C_RESET}\n")
 
     return result
 
