@@ -1,4 +1,3 @@
-# piviz/graphics/primitives.py
 """
 PiViz High-Performance Primitives (v1.2.0)
 ========================================
@@ -23,10 +22,8 @@ Author: Yogesh Phalak
 import moderngl
 import numpy as np
 import math
-import os
 from typing import Tuple, Optional, Dict, List, Union
 from dataclasses import dataclass, field
-from .obj_loader import load_obj
 
 # ============================================================
 # GLOBAL STATE
@@ -48,34 +45,42 @@ _uniform_cache: Dict[str, Dict] = {}
 # ============================================================
 # STRUCT-OF-ARRAYS QUEUES
 # ============================================================
+# Pre-allocated numpy arrays that grow as needed.
+# draw_*() writes directly into these — no tuple/list overhead.
+# flush reads them with zero Python loops.
 
 _INITIAL_CAPACITY = 4096
 
-# -- Spheres: 8 floats (cx, cy, cz, radius, r, g, b, a)
+# -- Spheres: 7 floats per instance (center3 + radius1 + color3_alpha1 = 3+1+4 = 8? no: center3, radius, rgba4 = 8)
+# Actually: we group by detail, so we need detail too. But 95%+ of spheres share
+# the same detail. Strategy: store detail separately, fast-path single-detail case.
+# Layout: [cx, cy, cz, radius, r, g, b, a] = 8 floats
 _sphere_data: np.ndarray = np.empty((_INITIAL_CAPACITY, 8), dtype='f4')
 _sphere_details: np.ndarray = np.empty(_INITIAL_CAPACITY, dtype='i4')
 _sphere_count: int = 0
 
-# -- Cubes: 13 floats (center3, size3, color4, rotation3)
+# -- Cubes: need center(3) + size(3) + color(4) + rotation(3) = 13 floats
+# Rotation requires slow path, but we track a flag to skip it when possible
 _cube_data: np.ndarray = np.empty((_INITIAL_CAPACITY, 13), dtype='f4')
 _cube_has_rotation: np.ndarray = np.empty(_INITIAL_CAPACITY, dtype='bool')
 _cube_count: int = 0
 
-# -- Cylinders: 11 floats (start3, end3, radius, color4)
+# -- Cylinders: 11 floats (start3 + end3 + radius + color4)
 _cylinder_data: np.ndarray = np.empty((_INITIAL_CAPACITY, 11), dtype='f4')
 _cylinder_details: np.ndarray = np.empty(_INITIAL_CAPACITY, dtype='i4')
 _cylinder_count: int = 0
 
-# -- Cones: 11 floats (base3, tip3, radius, color4)
+# -- Cones: 11 floats (base3 + tip3 + radius + color4)
 _cone_data: np.ndarray = np.empty((_INITIAL_CAPACITY, 11), dtype='f4')
 _cone_details: np.ndarray = np.empty(_INITIAL_CAPACITY, dtype='i4')
 _cone_count: int = 0
 
-# -- Lines: 11 floats (start3, end3, color4, width1)
+# -- Lines: 11 floats (start3 + end3 + color4 + width1)
 _line_data: np.ndarray = np.empty((_INITIAL_CAPACITY, 11), dtype='f4')
 _line_count: int = 0
 
-# -- Triangles: 22 floats (v1_3, v2_3, v3_3, c1_4, c2_4, c3_4)
+# -- Triangles: 22 floats (v1_3 + v2_3 + v3_3 + c1_4 + c2_4 + c3_4 + has_per_vertex_color)
+# Actually store vertices and colors separately for vectorized normal computation
 _tri_v1: np.ndarray = np.empty((_INITIAL_CAPACITY, 3), dtype='f4')
 _tri_v2: np.ndarray = np.empty((_INITIAL_CAPACITY, 3), dtype='f4')
 _tri_v3: np.ndarray = np.empty((_INITIAL_CAPACITY, 3), dtype='f4')
@@ -84,9 +89,10 @@ _tri_c2: np.ndarray = np.empty((_INITIAL_CAPACITY, 4), dtype='f4')
 _tri_c3: np.ndarray = np.empty((_INITIAL_CAPACITY, 4), dtype='f4')
 _tri_count: int = 0
 
-# -- Meshes: Dictionary of SoA queues
-# _mesh_batches[path] = { 'count': 0, 'capacity': N, 'data': ndarray(N, 13) }
-_mesh_batches: Dict[str, Dict] = {}
+# -- Meshes: 13 floats per instance (pos3 + scale3 + rot3 + color4)
+# Grouped by mesh path — each path maps to its own instance array
+_mesh_instances: Dict[str, np.ndarray] = {}  # path -> (N, 13) f4
+_mesh_counts: Dict[str, int] = {}  # path -> count
 
 
 def _ensure_capacity(current_arr, needed, cols=None):
@@ -107,7 +113,7 @@ _cached_sphere_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
 _cached_cube_vbo: Optional[Tuple[moderngl.Buffer, int]] = None
 _cached_unit_cylinder_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
 _cached_cone_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
-_cached_mesh_vbo: Dict[str, Tuple[moderngl.Buffer, int]] = {}  # path -> (vbo, count)
+_cached_mesh_vbo: Dict[str, Tuple[moderngl.Buffer, int]] = {}  # path -> (vbo, vertex_count)
 
 # Persistent GPU buffers (grow as needed, never shrink)
 _instance_buffer: Optional[moderngl.Buffer] = None
@@ -205,7 +211,6 @@ def _get_program(name: str) -> moderngl.Program:
 
     if name not in _programs:
         if name == 'instanced_solid':
-            # Instanced rendering with per-instance transform and color
             _programs[name] = _ctx.program(
                 vertex_shader='''
                     #version 330
@@ -216,7 +221,6 @@ def _get_program(name: str) -> moderngl.Program:
                     in vec3 in_position;
                     in vec3 in_normal;
 
-                    // Per-instance: 4x4 transform matrix + RGBA color
                     in vec4 inst_row0;
                     in vec4 inst_row1;
                     in vec4 inst_row2;
@@ -254,108 +258,6 @@ def _get_program(name: str) -> moderngl.Program:
 
                     void main() {
                         vec3 norm = normalize(v_normal);
-                        vec3 light = normalize(v_light_dir);
-
-                        float diff = max(dot(norm, light), 0.0);
-
-                        float spec = 0.0;
-                        if (use_specular && diff > 0.0) {
-                            vec3 view_dir = normalize(cam_pos - v_position);
-                            vec3 halfway = normalize(light + view_dir);
-                            spec = pow(max(dot(norm, halfway), 0.0), shininess);
-                        }
-
-                        float ambient = 0.3;
-                        vec3 result = v_color.rgb * (ambient + diff * 0.7);
-                        if (use_specular) {
-                            result += vec3(1.0) * spec * specular_strength;
-                        }
-
-                        frag_color = vec4(result, v_color.a);
-                    }
-                '''
-            )
-
-        elif name == 'instanced_mesh':
-            # Optimized shader for meshes: calculates transform on GPU
-            # Inputs: pos(3), scale(3), rotation(3), color(4) = 13 floats
-            # Vertex color support: in_color (from VBO) * inst_color (from instance)
-            _programs[name] = _ctx.program(
-                vertex_shader='''
-                    #version 330
-                    uniform mat4 view;
-                    uniform mat4 projection;
-                    uniform vec3 light_dir;
-
-                    in vec3 in_position;
-                    in vec3 in_normal;
-                    in vec4 in_color; // Vertex color from OBJ
-
-                    in vec3 inst_pos;
-                    in vec3 inst_scale;
-                    in vec3 inst_rot;
-                    in vec4 inst_color; // Instance color override
-
-                    out vec3 v_normal;
-                    out vec3 v_position;
-                    out vec4 v_color;
-                    out vec3 v_light_dir;
-
-                    mat3 make_rotation(vec3 r) {
-                        float cx = cos(r.x); float sx = sin(r.x);
-                        float cy = cos(r.y); float sy = sin(r.y);
-                        float cz = cos(r.z); float sz = sin(r.z);
-
-                        // Correct column-major construction for Rx * Ry * Rz
-                        // Rx
-                        mat3 Rx = mat3(1, 0, 0, 0, cx, sx, 0, -sx, cx);
-                        // Ry
-                        mat3 Ry = mat3(cy, 0, -sy, 0, 1, 0, sy, 0, cy);
-                        // Rz
-                        mat3 Rz = mat3(cz, sz, 0, -sz, cz, 0, 0, 0, 1);
-                        
-                        // Order: Rz * Ry * Rx
-                        return Rz * Ry * Rx;
-                    }
-
-                    void main() {
-                        mat3 rot = make_rotation(inst_rot);
-                        
-                        // Scale, Rotate, Translate
-                        vec3 world_pos = (rot * (in_position * inst_scale)) + inst_pos;
-                        
-                        v_position = world_pos;
-                        
-                        // Normal matrix
-                        vec3 n = in_normal / inst_scale;
-                        v_normal = rot * normalize(n);
-                        
-                        // Combine vertex color and instance color
-                        v_color = in_color * inst_color;
-                        v_light_dir = light_dir;
-                        gl_Position = projection * view * vec4(world_pos, 1.0);
-                    }
-                ''',
-                fragment_shader='''
-                    #version 330
-                    uniform float shininess;
-                    uniform float specular_strength;
-                    uniform bool use_specular;
-                    uniform vec3 cam_pos;
-
-                    in vec3 v_normal;
-                    in vec3 v_position;
-                    in vec4 v_color;
-                    in vec3 v_light_dir;
-
-                    out vec4 frag_color;
-
-                    void main() {
-                        vec3 norm = normalize(v_normal);
-                        
-                        // Two-sided lighting
-                        if (!gl_FrontFacing) norm = -norm;
-                        
                         vec3 light = normalize(v_light_dir);
                         float diff = max(dot(norm, light), 0.0);
 
@@ -595,7 +497,6 @@ def _get_program(name: str) -> moderngl.Program:
             )
 
         elif name == 'batched_triangles':
-            # Batched triangle rendering with per-vertex color and lighting
             _programs[name] = _ctx.program(
                 vertex_shader='''
                     #version 330
@@ -658,6 +559,90 @@ def _get_program(name: str) -> moderngl.Program:
                 '''
             )
 
+        elif name == 'instanced_mesh':
+            # Compact mesh instancing: 13 floats/instance (pos3 + scale3 + rot3 + color4)
+            # GPU builds rotation matrix — no CPU matrix work needed
+            _programs[name] = _ctx.program(
+                vertex_shader='''
+                    #version 330
+                    uniform mat4 view;
+                    uniform mat4 projection;
+                    uniform vec3 light_dir;
+
+                    in vec3 in_position;
+                    in vec3 in_normal;
+                    in vec4 in_color;  // vertex color from OBJ
+
+                    in vec3 inst_pos;
+                    in vec3 inst_scale;
+                    in vec3 inst_rot;
+                    in vec4 inst_color;  // instance color tint
+
+                    out vec3 v_normal;
+                    out vec3 v_position;
+                    out vec4 v_color;
+                    out vec3 v_light_dir;
+
+                    void main() {
+                        float cx = cos(inst_rot.x), sx = sin(inst_rot.x);
+                        float cy = cos(inst_rot.y), sy = sin(inst_rot.y);
+                        float cz = cos(inst_rot.z), sz = sin(inst_rot.z);
+
+                        // Rotation: R = Rz * Ry * Rx (column-major)
+                        mat3 rot = mat3(
+                            cy*cz,              cy*sz,              -sy,
+                            sx*sy*cz - cx*sz,   sx*sy*sz + cx*cz,   sx*cy,
+                            cx*sy*cz + sx*sz,   cx*sy*sz - sx*cz,   cx*cy
+                        );
+
+                        vec3 scaled = in_position * inst_scale;
+                        vec3 world_pos = rot * scaled + inst_pos;
+                        v_position = world_pos;
+
+                        // Normal transform: rot * (normal / scale) then normalize
+                        v_normal = normalize(rot * (in_normal / inst_scale));
+
+                        v_color = in_color * inst_color;
+                        v_light_dir = light_dir;
+                        gl_Position = projection * view * vec4(world_pos, 1.0);
+                    }
+                ''',
+                fragment_shader='''
+                    #version 330
+                    uniform float shininess;
+                    uniform float specular_strength;
+                    uniform bool use_specular;
+                    uniform vec3 cam_pos;
+
+                    in vec3 v_normal;
+                    in vec3 v_position;
+                    in vec4 v_color;
+                    in vec3 v_light_dir;
+
+                    out vec4 frag_color;
+
+                    void main() {
+                        vec3 norm = normalize(v_normal);
+                        if (!gl_FrontFacing) norm = -norm;
+
+                        vec3 light = normalize(v_light_dir);
+                        float diff = max(dot(norm, light), 0.0);
+
+                        float spec = 0.0;
+                        if (use_specular && diff > 0.0) {
+                            vec3 view_dir = normalize(cam_pos - v_position);
+                            vec3 halfway = normalize(light + view_dir);
+                            spec = pow(max(dot(norm, halfway), 0.0), shininess);
+                        }
+
+                        float ambient = 0.3;
+                        vec3 result = v_color.rgb * (ambient + diff * 0.7);
+                        if (use_specular) result += vec3(1.0) * spec * specular_strength;
+                        frag_color = vec4(result, v_color.a);
+                    }
+                '''
+            )
+
     return _programs[name]
 
 
@@ -671,7 +656,6 @@ def _generate_sphere_geometry(detail: int = 12) -> np.ndarray:
     for i in range(detail):
         lat0 = math.pi * (-0.5 + float(i) / detail)
         lat1 = math.pi * (-0.5 + float(i + 1) / detail)
-
         for j in range(detail):
             lon0 = 2 * math.pi * float(j) / detail
             lon1 = 2 * math.pi * float(j + 1) / detail
@@ -688,7 +672,6 @@ def _generate_sphere_geometry(detail: int = 12) -> np.ndarray:
             vertices.extend(p(lat0, lon0))
             vertices.extend(p(lat1, lon1))
             vertices.extend(p(lat1, lon0))
-
     return np.array(vertices, dtype='f4')
 
 
@@ -800,31 +783,24 @@ def _get_cached_cone(detail: int = 16) -> Tuple[moderngl.Buffer, int]:
     return _cached_cone_vbo[detail]
 
 
-def _get_cached_mesh(path: str) -> Tuple[moderngl.Buffer, int]:
-    """Get or create cached mesh geometry."""
+def _get_cached_mesh(path: str) -> Tuple[Optional[moderngl.Buffer], int]:
+    """Get or create cached mesh geometry from OBJ file.
+    Returns (vbo, vertex_count). VBO format: 10 floats (pos3 + normal3 + rgba4)."""
     global _cached_mesh_vbo, _ctx
     if path not in _cached_mesh_vbo:
+        from .obj_loader import load_obj
         data = load_obj(path)
         if len(data) == 0:
-            return None, 0
-        vbo = _ctx.buffer(data.tobytes())
-        _cached_mesh_vbo[path] = (vbo, len(data))
+            _cached_mesh_vbo[path] = (None, 0)
+        else:
+            vbo = _ctx.buffer(data.tobytes())
+            _cached_mesh_vbo[path] = (vbo, len(data))
     return _cached_mesh_vbo[path]
 
 
 # ============================================================
-# TRANSFORM UTILITIES
+# TRANSFORM UTILITIES (only needed for rotated cubes now)
 # ============================================================
-
-def _make_transform_matrix(center, scale, rotation_matrix=None) -> np.ndarray:
-    m = np.eye(4, dtype='f4')
-    if rotation_matrix is not None:
-        m[:3, :3] = rotation_matrix * np.array(scale, dtype='f4')
-    else:
-        m[0, 0], m[1, 1], m[2, 2] = scale
-    m[0, 3], m[1, 3], m[2, 3] = center
-    return m
-
 
 def _make_rotation_matrix_xyz(rotation) -> np.ndarray:
     rx, ry, rz = rotation
@@ -1072,72 +1048,105 @@ def draw_face(v1, v2, v3, c1=(1, 0, 0), c2=(0, 1, 0), c3=(0, 0, 1)):
     _update_bounds(np.min(pts, axis=0), np.max(pts, axis=0))
 
 
-def draw_mesh(mesh_path: str, center=(0, 0, 0), scale=1.0, rotation=(0, 0, 0), color=(1, 1, 1), cull_face=True):
-    """
-    Draw a 3D mesh from an OBJ file.
-    
-    Args:
-        mesh_path: Path to .obj file
-        center: Position (x, y, z)
-        scale: Uniform scale (float) or non-uniform (sx, sy, sz)
-        rotation: Euler angles (rx, ry, rz) in radians
-        color: Mesh color (r, g, b) or (r, g, b, a)
-        cull_face: Enable backface culling (default True)
-    """
-    global _mesh_batches
-    
-    if mesh_path not in _mesh_batches:
-        _mesh_batches[mesh_path] = {
-            'count': 0,
-            'capacity': 1024,
-            'pos': np.empty((1024, 3), dtype='f4'),
-            'scale': np.empty((1024, 3), dtype='f4'),
-            'rot': np.empty((1024, 3), dtype='f4'),
-            'color': np.empty((1024, 4), dtype='f4'),
-            'cull': True # Assume consistent culling per mesh path for now
-        }
-    
-    batch = _mesh_batches[mesh_path]
-    i = batch['count']
-    
-    # Ensure capacity
-    if i >= batch['capacity']:
-        new_cap = batch['capacity'] * 2
-        batch['capacity'] = new_cap
-        batch['pos'] = _ensure_capacity(batch['pos'], new_cap)
-        batch['scale'] = _ensure_capacity(batch['scale'], new_cap)
-        batch['rot'] = _ensure_capacity(batch['rot'], new_cap)
-        batch['color'] = _ensure_capacity(batch['color'], new_cap)
-    
-    # Write data
-    batch['pos'][i] = center
-    
-    if isinstance(scale, (int, float)):
-        batch['scale'][i] = (scale, scale, scale)
-    else:
-        batch['scale'][i] = scale
-        
-    batch['rot'][i] = rotation
-    batch['color'][i] = _ensure_rgba(color)
-    batch['cull'] = cull_face # Update culling preference
-    
-    batch['count'] = i + 1
-    
-    # Approximate bounds
-    c = np.array(center, dtype='f4')
-    if isinstance(scale, (int, float)):
-        s = scale
-    else:
-        s = max(scale)
-    _update_bounds(c - s, c + s)
-
-
 def draw_path(points, color=(1, 1, 1), width=1.0):
     """Draw a connected path through points."""
     if len(points) < 2:
         return
     for i in range(len(points) - 1):
         draw_line(points[i], points[i + 1], color, width)
+
+
+def draw_mesh(path, position=(0, 0, 0), scale=(1, 1, 1), rotation=(0, 0, 0), color=(1, 1, 1, 1)):
+    """
+    Queue a mesh instance for batched rendering.
+
+    Args:
+        path: Path to OBJ file (geometry cached on first load)
+        position: (x, y, z) world position
+        scale: (sx, sy, sz) or scalar
+        rotation: (rx, ry, rz) Euler angles in radians (Rz * Ry * Rx order)
+        color: (r, g, b) or (r, g, b, a) — multiplied with vertex colors from OBJ
+    """
+    global _mesh_instances, _mesh_counts
+
+    if isinstance(scale, (int, float)):
+        scale = (scale, scale, scale)
+    c = _ensure_rgba(color)
+
+    if path not in _mesh_instances:
+        _mesh_instances[path] = np.empty((_INITIAL_CAPACITY, 13), dtype='f4')
+        _mesh_counts[path] = 0
+
+    i = _mesh_counts[path]
+    _mesh_instances[path] = _ensure_capacity(_mesh_instances[path], i + 1)
+
+    _mesh_instances[path][i, 0:3] = position
+    _mesh_instances[path][i, 3:6] = scale
+    _mesh_instances[path][i, 6:9] = rotation
+    _mesh_instances[path][i, 9:13] = c
+    _mesh_counts[path] = i + 1
+
+    p = np.array(position, dtype='f4')
+    s_max = max(abs(scale[0]), abs(scale[1]), abs(scale[2]))
+    _update_bounds(p - s_max, p + s_max)
+
+
+def draw_meshes_batch(path, positions, scales, rotations, colors):
+    """
+    Queue many mesh instances from numpy arrays — zero per-mesh loop.
+
+    Args:
+        path: Path to OBJ file
+        positions: (N, 3) float32 array
+        scales: (N, 3) float32 array, or scalar, or (3,) broadcast
+        rotations: (N, 3) float32 array, or (3,) broadcast, or None for no rotation
+        colors: (N, 3) or (N, 4) float32 array
+    """
+    global _mesh_instances, _mesh_counts
+
+    if not isinstance(positions, np.ndarray):
+        positions = np.array(positions, dtype='f4')
+    n = len(positions)
+    if n == 0:
+        return
+
+    if isinstance(scales, (int, float)):
+        scales = np.full((n, 3), scales, dtype='f4')
+    elif not isinstance(scales, np.ndarray):
+        scales = np.array(scales, dtype='f4')
+    if scales.ndim == 1:
+        scales = np.broadcast_to(scales, (n, 3)).copy()
+
+    if rotations is None:
+        rotations = np.zeros((n, 3), dtype='f4')
+    elif not isinstance(rotations, np.ndarray):
+        rotations = np.array(rotations, dtype='f4')
+    if rotations.ndim == 1:
+        rotations = np.broadcast_to(rotations, (n, 3)).copy()
+
+    if not isinstance(colors, np.ndarray):
+        colors = np.array(colors, dtype='f4')
+
+    if path not in _mesh_instances:
+        _mesh_instances[path] = np.empty((max(_INITIAL_CAPACITY, n), 13), dtype='f4')
+        _mesh_counts[path] = 0
+
+    needed = _mesh_counts[path] + n
+    _mesh_instances[path] = _ensure_capacity(_mesh_instances[path], needed)
+
+    s = _mesh_counts[path]
+    _mesh_instances[path][s:s + n, 0:3] = positions
+    _mesh_instances[path][s:s + n, 3:6] = scales
+    _mesh_instances[path][s:s + n, 6:9] = rotations
+    if colors.shape[-1] == 3:
+        _mesh_instances[path][s:s + n, 9:12] = colors
+        _mesh_instances[path][s:s + n, 12] = 1.0
+    else:
+        _mesh_instances[path][s:s + n, 9:13] = colors
+    _mesh_counts[path] = s + n
+
+    s_max = float(np.max(np.abs(scales)))
+    _update_bounds(np.min(positions, axis=0) - s_max, np.max(positions, axis=0) + s_max)
 
 
 # ============================================================
@@ -1177,14 +1186,14 @@ def draw_spheres_batch(centers, radii, colors, detail=12):
 
     s = _sphere_count
     # Bulk write — no Python loop
-    _sphere_data[s:s+n, 0:3] = centers
-    _sphere_data[s:s+n, 3] = radii
+    _sphere_data[s:s + n, 0:3] = centers
+    _sphere_data[s:s + n, 3] = radii
     if colors.shape[-1] == 3:
-        _sphere_data[s:s+n, 4:7] = colors
-        _sphere_data[s:s+n, 7] = 1.0  # alpha
+        _sphere_data[s:s + n, 4:7] = colors
+        _sphere_data[s:s + n, 7] = 1.0  # alpha
     else:
-        _sphere_data[s:s+n, 4:8] = colors
-    _sphere_details[s:s+n] = detail
+        _sphere_data[s:s + n, 4:8] = colors
+    _sphere_details[s:s + n] = detail
     _sphere_count = s + n
 
     # Bounds
@@ -1226,15 +1235,15 @@ def draw_cylinders_batch(starts, ends, radii, colors, detail=8):
     _cylinder_details = _ensure_capacity(_cylinder_details, needed)
 
     s = _cylinder_count
-    _cylinder_data[s:s+n, 0:3] = starts
-    _cylinder_data[s:s+n, 3:6] = ends
-    _cylinder_data[s:s+n, 6] = radii
+    _cylinder_data[s:s + n, 0:3] = starts
+    _cylinder_data[s:s + n, 3:6] = ends
+    _cylinder_data[s:s + n, 6] = radii
     if colors.shape[-1] == 3:
-        _cylinder_data[s:s+n, 7:10] = colors
-        _cylinder_data[s:s+n, 10] = 1.0  # alpha
+        _cylinder_data[s:s + n, 7:10] = colors
+        _cylinder_data[s:s + n, 10] = 1.0  # alpha
     else:
-        _cylinder_data[s:s+n, 7:11] = colors
-    _cylinder_details[s:s+n] = detail
+        _cylinder_data[s:s + n, 7:11] = colors
+    _cylinder_details[s:s + n] = detail
     _cylinder_count = s + n
 
     r_max = float(np.max(radii))
@@ -1269,17 +1278,136 @@ def draw_lines_batch(starts, ends, colors, width=1.0):
     _line_data = _ensure_capacity(_line_data, needed)
 
     s = _line_count
-    _line_data[s:s+n, 0:3] = starts
-    _line_data[s:s+n, 3:6] = ends
+    _line_data[s:s + n, 0:3] = starts
+    _line_data[s:s + n, 3:6] = ends
     if colors.shape[-1] == 3:
-        _line_data[s:s+n, 6:9] = colors
-        _line_data[s:s+n, 9] = 1.0
+        _line_data[s:s + n, 6:9] = colors
+        _line_data[s:s + n, 9] = 1.0
     else:
-        _line_data[s:s+n, 6:10] = colors
-    _line_data[s:s+n, 10] = width
+        _line_data[s:s + n, 6:10] = colors
+    _line_data[s:s + n, 10] = width
     _line_count = s + n
 
     all_pts = np.concatenate([starts, ends], axis=0)
+    _update_bounds(np.min(all_pts, axis=0), np.max(all_pts, axis=0))
+
+
+def draw_triangles_batch(v1s, v2s, v3s, colors):
+    """
+    Draw many flat-colored triangles from numpy arrays — zero per-triangle loop.
+
+    Args:
+        v1s: (N, 3) float32 array — first vertices
+        v2s: (N, 3) float32 array — second vertices
+        v3s: (N, 3) float32 array — third vertices
+        colors: (N, 3) or (N, 4) float32 array — one color per triangle
+    """
+    global _tri_v1, _tri_v2, _tri_v3, _tri_c1, _tri_c2, _tri_c3, _tri_count
+
+    if not isinstance(v1s, np.ndarray):
+        v1s = np.array(v1s, dtype='f4')
+    n = len(v1s)
+    if n == 0:
+        return
+    if not isinstance(v2s, np.ndarray):
+        v2s = np.array(v2s, dtype='f4')
+    if not isinstance(v3s, np.ndarray):
+        v3s = np.array(v3s, dtype='f4')
+    if not isinstance(colors, np.ndarray):
+        colors = np.array(colors, dtype='f4')
+
+    needed = _tri_count + n
+    _tri_v1 = _ensure_capacity(_tri_v1, needed)
+    _tri_v2 = _ensure_capacity(_tri_v2, needed)
+    _tri_v3 = _ensure_capacity(_tri_v3, needed)
+    _tri_c1 = _ensure_capacity(_tri_c1, needed)
+    _tri_c2 = _ensure_capacity(_tri_c2, needed)
+    _tri_c3 = _ensure_capacity(_tri_c3, needed)
+
+    s = _tri_count
+    _tri_v1[s:s + n] = v1s
+    _tri_v2[s:s + n] = v2s
+    _tri_v3[s:s + n] = v3s
+
+    # Expand 3-component color to 4
+    if colors.ndim == 1:
+        # Single color for all triangles
+        c = _ensure_rgba(tuple(colors))
+        _tri_c1[s:s + n] = c
+        _tri_c2[s:s + n] = c
+        _tri_c3[s:s + n] = c
+    elif colors.shape[-1] == 3:
+        _tri_c1[s:s + n, :3] = colors
+        _tri_c1[s:s + n, 3] = 1.0
+        _tri_c2[s:s + n, :3] = colors
+        _tri_c2[s:s + n, 3] = 1.0
+        _tri_c3[s:s + n, :3] = colors
+        _tri_c3[s:s + n, 3] = 1.0
+    else:
+        _tri_c1[s:s + n] = colors
+        _tri_c2[s:s + n] = colors
+        _tri_c3[s:s + n] = colors
+
+    _tri_count = s + n
+
+    all_pts = np.concatenate([v1s, v2s, v3s], axis=0)
+    _update_bounds(np.min(all_pts, axis=0), np.max(all_pts, axis=0))
+
+
+def draw_faces_batch(v1s, v2s, v3s, c1s, c2s, c3s):
+    """
+    Draw many per-vertex-colored triangles — zero per-face loop.
+
+    Args:
+        v1s, v2s, v3s: (N, 3) float32 arrays — triangle vertices
+        c1s, c2s, c3s: (N, 3) or (N, 4) float32 arrays — per-vertex colors
+    """
+    global _tri_v1, _tri_v2, _tri_v3, _tri_c1, _tri_c2, _tri_c3, _tri_count
+
+    if not isinstance(v1s, np.ndarray):
+        v1s = np.array(v1s, dtype='f4')
+    n = len(v1s)
+    if n == 0:
+        return
+    if not isinstance(v2s, np.ndarray):
+        v2s = np.array(v2s, dtype='f4')
+    if not isinstance(v3s, np.ndarray):
+        v3s = np.array(v3s, dtype='f4')
+    if not isinstance(c1s, np.ndarray):
+        c1s = np.array(c1s, dtype='f4')
+    if not isinstance(c2s, np.ndarray):
+        c2s = np.array(c2s, dtype='f4')
+    if not isinstance(c3s, np.ndarray):
+        c3s = np.array(c3s, dtype='f4')
+
+    needed = _tri_count + n
+    _tri_v1 = _ensure_capacity(_tri_v1, needed)
+    _tri_v2 = _ensure_capacity(_tri_v2, needed)
+    _tri_v3 = _ensure_capacity(_tri_v3, needed)
+    _tri_c1 = _ensure_capacity(_tri_c1, needed)
+    _tri_c2 = _ensure_capacity(_tri_c2, needed)
+    _tri_c3 = _ensure_capacity(_tri_c3, needed)
+
+    s = _tri_count
+    _tri_v1[s:s + n] = v1s
+    _tri_v2[s:s + n] = v2s
+    _tri_v3[s:s + n] = v3s
+
+    if c1s.shape[-1] == 3:
+        _tri_c1[s:s + n, :3] = c1s
+        _tri_c1[s:s + n, 3] = 1.0
+        _tri_c2[s:s + n, :3] = c2s
+        _tri_c2[s:s + n, 3] = 1.0
+        _tri_c3[s:s + n, :3] = c3s
+        _tri_c3[s:s + n, 3] = 1.0
+    else:
+        _tri_c1[s:s + n] = c1s
+        _tri_c2[s:s + n] = c2s
+        _tri_c3[s:s + n] = c3s
+
+    _tri_count = s + n
+
+    all_pts = np.concatenate([v1s, v2s, v3s], axis=0)
     _update_bounds(np.min(all_pts, axis=0), np.max(all_pts, axis=0))
 
 
@@ -1372,7 +1500,7 @@ def _clear_vao_cache_for_buffer(buffer_type: str):
     keys_to_remove = []
     for key in _cached_vaos:
         type_id = key[0]
-        if buffer_type == 'instance' and type_id in ('sphere', 'cube', 'cylinder', 'cone', 'mesh', 'mesh_opt'):
+        if buffer_type == 'instance' and type_id in ('sphere', 'cube', 'cylinder', 'cone'):
             keys_to_remove.append(key)
         elif buffer_type == 'line' and type_id == 'lines':
             keys_to_remove.append(key)
@@ -1402,7 +1530,7 @@ def _flush_spheres():
         return
 
     n = _sphere_count
-    data = _sphere_data[:n]        # (n, 8): cx,cy,cz, radius, r,g,b,a
+    data = _sphere_data[:n]  # (n, 8): cx,cy,cz, radius, r,g,b,a
     details = _sphere_details[:n]  # (n,)
 
     prog_name = 'instanced_sphere'
@@ -1430,11 +1558,13 @@ def _flush_spheres():
         _instance_buffer.write(subset.tobytes())
 
         vao_key = ('sphere', detail)
+
         def create_vao(gvbo=geo_vbo):
             return _ctx.vertex_array(prog, [
                 (gvbo, '3f 3f', 'in_position', 'in_normal'),
                 (_instance_buffer, '3f 1f 4f/i', 'inst_center', 'inst_radius', 'inst_color'),
             ])
+
         vao = _get_cached_vao(vao_key, create_vao)
 
         _set_common_uniforms(prog, prog_name)
@@ -1464,17 +1594,17 @@ def _flush_cubes():
     if np.any(no_rot_mask):
         idx = np.where(no_rot_mask)[0]
         # Build diagonal matrices directly with vectorized indexing
-        instance_data[idx, 0] = data[idx, 3]    # size_x -> m[0,0]
-        instance_data[idx, 5] = data[idx, 4]    # size_y -> m[1,1]
-        instance_data[idx, 10] = data[idx, 5]   # size_z -> m[2,2]
-        instance_data[idx, 15] = 1.0            # m[3,3]
-        instance_data[idx, 12] = data[idx, 0]   # cx -> m[3,0] col-major
-        instance_data[idx, 13] = data[idx, 1]   # cy
-        instance_data[idx, 14] = data[idx, 2]   # cz
-        instance_data[idx, 16] = data[idx, 6]   # r
-        instance_data[idx, 17] = data[idx, 7]   # g
-        instance_data[idx, 18] = data[idx, 8]   # b
-        instance_data[idx, 19] = data[idx, 9]   # a
+        instance_data[idx, 0] = data[idx, 3]  # size_x -> m[0,0]
+        instance_data[idx, 5] = data[idx, 4]  # size_y -> m[1,1]
+        instance_data[idx, 10] = data[idx, 5]  # size_z -> m[2,2]
+        instance_data[idx, 15] = 1.0  # m[3,3]
+        instance_data[idx, 12] = data[idx, 0]  # cx -> m[3,0] col-major
+        instance_data[idx, 13] = data[idx, 1]  # cy
+        instance_data[idx, 14] = data[idx, 2]  # cz
+        instance_data[idx, 16] = data[idx, 6]  # r
+        instance_data[idx, 17] = data[idx, 7]  # g
+        instance_data[idx, 18] = data[idx, 8]  # b
+        instance_data[idx, 19] = data[idx, 9]  # a
 
     # Slow path: cubes with rotation (rare)
     if np.any(has_rot):
@@ -1496,11 +1626,13 @@ def _flush_cubes():
     _instance_buffer.write(instance_data.tobytes())
 
     vao_key = ('cube', 0)
+
     def create_vao():
         return _ctx.vertex_array(prog, [
             (geo_vbo, '3f 3f', 'in_position', 'in_normal'),
             (_instance_buffer, '4f 4f 4f 4f 4f/i', 'inst_row0', 'inst_row1', 'inst_row2', 'inst_row3', 'inst_color'),
         ])
+
     vao = _get_cached_vao(vao_key, create_vao)
 
     _set_common_uniforms(prog, prog_name)
@@ -1514,7 +1646,7 @@ def _flush_directional(shape_name: str):
         count = _cylinder_count
         if count == 0:
             return
-        data = _cylinder_data[:count]      # (n, 11)
+        data = _cylinder_data[:count]  # (n, 11)
         details = _cylinder_details[:count]
         get_geo = _get_cached_cylinder
     else:
@@ -1547,11 +1679,13 @@ def _flush_directional(shape_name: str):
         _instance_buffer.write(subset.tobytes())
 
         vao_key = (shape_name, detail)
+
         def create_vao(gvbo=geo_vbo):
             return _ctx.vertex_array(prog, [
                 (gvbo, '3f 3f', 'in_position', 'in_normal'),
                 (_instance_buffer, '3f 3f 1f 4f/i', 'inst_start', 'inst_end', 'inst_radius', 'inst_color'),
             ])
+
         vao = _get_cached_vao(vao_key, create_vao)
 
         _set_common_uniforms(prog, prog_name)
@@ -1571,19 +1705,21 @@ def _flush_lines():
 
     # Build interleaved vertex data: 2 verts per line, 7 floats each
     vertex_data = np.empty((n * 2, 7), dtype='f4')
-    vertex_data[0::2, :3] = data[:, 0:3]   # starts
+    vertex_data[0::2, :3] = data[:, 0:3]  # starts
     vertex_data[0::2, 3:7] = data[:, 6:10]  # colors
-    vertex_data[1::2, :3] = data[:, 3:6]   # ends
+    vertex_data[1::2, :3] = data[:, 3:6]  # ends
     vertex_data[1::2, 3:7] = data[:, 6:10]  # colors
 
     _ensure_line_buffer(vertex_data.nbytes)
     _line_buffer.write(vertex_data.tobytes())
 
     vao_key = ('lines',)
+
     def create_vao():
         return _ctx.vertex_array(prog, [
             (_line_buffer, '3f 4f', 'in_position', 'in_color')
         ])
+
     vao = _get_cached_vao(vao_key, create_vao)
 
     _set_common_uniforms(prog, 'batched_lines')
@@ -1635,10 +1771,12 @@ def _flush_triangles():
     _triangle_buffer.write(vertex_data.tobytes())
 
     vao_key = ('triangles',)
+
     def create_vao():
         return _ctx.vertex_array(prog, [
             (_triangle_buffer, '3f 3f 4f', 'in_position', 'in_normal', 'in_color')
         ])
+
     vao = _get_cached_vao(vao_key, create_vao)
 
     _set_common_uniforms(prog, 'batched_triangles')
@@ -1649,70 +1787,45 @@ def _flush_triangles():
     _ctx.enable(moderngl.CULL_FACE)
 
 
+# ============================================================
+# MAIN FLUSH (called by engine at end of frame)
+# ============================================================
+
 def _flush_meshes():
-    """Render all queued meshes — zero-loop flush using SoA."""
-    global _mesh_batches
-    if not _mesh_batches:
-        return
+    """Render all queued mesh instances — one instanced draw call per mesh path."""
+    global _mesh_counts
 
-    prog_name = 'instanced_mesh'
-    prog = _get_program(prog_name)
-
-    for path, batch in _mesh_batches.items():
-        count = batch['count']
+    for path, count in _mesh_counts.items():
         if count == 0:
             continue
-            
-        geo_vbo, vertex_count = _get_cached_mesh(path)
-        if geo_vbo is None:
+
+        mesh_vbo, vertex_count = _get_cached_mesh(path)
+        if mesh_vbo is None or vertex_count == 0:
             continue
 
-        # Pack data: pos(3), scale(3), rot(3), color(4) = 13 floats
-        # We can write these arrays directly into the buffer if we interleave them
-        # or we can use separate attributes if we change the shader.
-        # But for now, let's stick to the single buffer layout for simplicity and just pack them.
-        # Since we have separate arrays, we need to stack them.
-        # This is still much faster than a Python loop.
-        
-        # Stack arrays: (N, 3), (N, 3), (N, 3), (N, 4) -> (N, 13)
-        # np.hstack is efficient
-        instance_data = np.hstack((
-            batch['pos'][:count],
-            batch['scale'][:count],
-            batch['rot'][:count],
-            batch['color'][:count]
-        ))
+        prog_name = 'instanced_mesh'
+        prog = _get_program(prog_name)
 
-        _ensure_instance_buffer(instance_data.nbytes)
-        _instance_buffer.write(instance_data.tobytes())
+        data = _mesh_instances[path][:count]  # (count, 13): pos3 + scale3 + rot3 + color4
 
-        vao_key = ('mesh_opt', path)
-        def create_vao(gvbo=geo_vbo):
+        _ensure_instance_buffer(data.nbytes)
+        _instance_buffer.write(data.tobytes())
+
+        # VAO key includes path to avoid conflicts between different meshes
+        vao_key = ('mesh', path)
+
+        def create_vao(gvbo=mesh_vbo):
             return _ctx.vertex_array(prog, [
                 (gvbo, '3f 3f 4f', 'in_position', 'in_normal', 'in_color'),
                 (_instance_buffer, '3f 3f 3f 4f/i', 'inst_pos', 'inst_scale', 'inst_rot', 'inst_color'),
             ])
+
         vao = _get_cached_vao(vao_key, create_vao)
 
         _set_common_uniforms(prog, prog_name)
         _set_lighting_uniforms(prog, prog_name)
-
-        should_cull = batch['cull']
-        if not should_cull:
-            _ctx.disable(moderngl.CULL_FACE)
-        
         vao.render(moderngl.TRIANGLES, instances=count)
-        
-        if not should_cull:
-            _ctx.enable(moderngl.CULL_FACE)
-            
-        # Reset count for next frame
-        batch['count'] = 0
 
-
-# ============================================================
-# MAIN FLUSH (called by engine at end of frame)
-# ============================================================
 
 def flush_all():
     """
@@ -1720,7 +1833,7 @@ def flush_all():
     Called automatically by the engine at end of each frame.
     """
     global _sphere_count, _cube_count, _cylinder_count, _cone_count
-    global _line_count, _tri_count
+    global _line_count, _tri_count, _mesh_counts
 
     _flush_spheres()
     _flush_cubes()
@@ -1744,16 +1857,18 @@ def flush_all():
     _cone_count = 0
     _line_count = 0
     _tri_count = 0
+    for path in _mesh_counts:
+        _mesh_counts[path] = 0
 
 
 def clear_cache():
     """Clear all cached geometry (call on context recreation)."""
     global _cached_sphere_vbo, _cached_cube_vbo, _cached_unit_cylinder_vbo, _cached_cone_vbo
+    global _cached_mesh_vbo
     global _instance_buffer, _line_buffer, _triangle_buffer
     global _cached_vaos, _uniform_cache
     global _sphere_count, _cube_count, _cylinder_count, _cone_count
-    global _line_count, _tri_count
-    global _cached_mesh_vbo, _mesh_batches
+    global _line_count, _tri_count, _mesh_instances, _mesh_counts
 
     _uniform_cache.clear()
 
@@ -1764,7 +1879,8 @@ def clear_cache():
     _cone_count = 0
     _line_count = 0
     _tri_count = 0
-    _mesh_batches.clear()
+    _mesh_instances.clear()
+    _mesh_counts.clear()
 
     for vao in _cached_vaos.values():
         try:
@@ -1800,10 +1916,11 @@ def clear_cache():
         except:
             pass
     _cached_cone_vbo.clear()
-    
+
     for vbo, _ in _cached_mesh_vbo.values():
         try:
-            vbo.release()
+            if vbo is not None:
+                vbo.release()
         except:
             pass
     _cached_mesh_vbo.clear()

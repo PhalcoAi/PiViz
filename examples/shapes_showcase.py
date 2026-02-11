@@ -21,6 +21,8 @@ Primitives Demonstrated:
 10. draw_arrow()       - Arrow with head (cylinder + cone)
 11. draw_point()       - Single point/dot
 12. draw_particles()   - Batch-optimized point cloud
+13. draw_mesh()        - Instanced OBJ mesh loading
+14. draw_meshes_batch() - Bulk instanced mesh rendering
 
 Material Functions:
 -------------------
@@ -29,7 +31,8 @@ Material Functions:
 
 Controls:
 ---------
-- 1-4: Switch between showcase sections
+- 0:   Show all sections
+- 1-5: Switch between showcase sections
 - M: Toggle matte/shiny materials
 - R: Reset rotation
 
@@ -37,6 +40,7 @@ Author: Yogesh Phalak
 """
 
 import numpy as np
+import os
 from piviz import PiVizStudio, PiVizFX, pgfx, Colors, Palette
 from piviz.ui import Label, Button, Checkbox
 from piviz.graphics.primitives import set_material_shiny, set_material_matte
@@ -51,6 +55,7 @@ class ShapesShowcase(PiVizFX):
     - Section 2: Flat Primitives (plane, triangle, face)
     - Section 3: Lines and Paths (line, path, arrow, point)
     - Section 4: Batch Rendering (particles, many shapes)
+    - Section 5: Mesh Loading (OBJ instancing, turntable, batch)
     """
 
     def setup(self):
@@ -59,13 +64,21 @@ class ShapesShowcase(PiVizFX):
         self.time_val = 0.0
 
         # Display options
-        self.current_section = 0  # 0 = all, 1-4 = individual sections
+        self.current_section = 0  # 0 = all, 1-5 = individual sections
         self.use_shiny = True
         self.show_labels = True
         self.animate = True
 
         # Generate particle data for Section 4
         self._generate_particles()
+
+        # Resolve mesh path for Section 5
+        self.mesh_path = os.path.join(os.path.dirname(__file__), '..', 'exports', 'teapot.obj')
+        if not os.path.exists(self.mesh_path):
+            self.mesh_path = 'exports/teapot.obj'
+        self.mesh_available = os.path.exists(self.mesh_path)
+        if not self.mesh_available:
+            print("[Warning] teapot.obj not found at exports/teapot.obj — Section 5 disabled")
 
         # Setup UI
         self._setup_ui()
@@ -117,6 +130,7 @@ class ShapesShowcase(PiVizFX):
         self.ui_manager.add_widget("btn_s2", Button("Flat", lambda: self._set_section(2)))
         self.ui_manager.add_widget("btn_s3", Button("Lines", lambda: self._set_section(3)))
         self.ui_manager.add_widget("btn_s4", Button("Batch", lambda: self._set_section(4)))
+        self.ui_manager.add_widget("btn_s5", Button("Mesh", lambda: self._set_section(5)))
 
         # Options
         self.ui_manager.add_widget(
@@ -131,13 +145,16 @@ class ShapesShowcase(PiVizFX):
     def _set_section(self, section):
         """Switch to a specific section."""
         self.current_section = section
-        names = ["All Shapes", "Basic Solids", "Flat Primitives", "Lines & Paths", "Batch Rendering"]
+        names = ["All Shapes", "Basic Solids", "Flat Primitives",
+                 "Lines & Paths", "Batch Rendering", "Mesh Loading"]
         self.lbl_section.text = f"Section: {names[section]}"
 
         # Adjust camera for different sections
         if self.camera:
             if section == 4:
                 self.camera.distance = 15.0
+            elif section == 5:
+                self.camera.distance = 20.0
             else:
                 self.camera.distance = 25.0
 
@@ -163,6 +180,8 @@ class ShapesShowcase(PiVizFX):
             self._set_section(3)
         elif key == 52:  # 4
             self._set_section(4)
+        elif key == 53:  # 5
+            self._set_section(5)
         elif key == 48:  # 0
             self._set_section(0)
         elif key == 77:  # M
@@ -192,6 +211,10 @@ class ShapesShowcase(PiVizFX):
 
         if self.current_section == 0 or self.current_section == 4:
             self._draw_section_4_batch()
+
+        if self.current_section == 0 or self.current_section == 5:
+            if self.mesh_available:
+                self._draw_section_5_meshes()
 
     # =========================================================================
     # SECTION 1: Basic Solid Shapes
@@ -631,6 +654,188 @@ class ShapesShowcase(PiVizFX):
 
             prev_pos = pos
 
+    # =========================================================================
+    # SECTION 5: Mesh Loading (OBJ Instancing)
+    # =========================================================================
+
+    def _draw_section_5_meshes(self):
+        """
+        Section 5: OBJ Mesh Loading and Instanced Rendering
+
+        Demonstrates:
+        - draw_mesh():         Single mesh with position, scale, rotation, color
+        - draw_meshes_batch(): Many meshes in one call (GPU instancing)
+
+        Layout:
+        - Left:   Hero teapot on a pedestal, slow turntable rotation
+        - Center: Feature row — scale, rotation, color tinting demos
+        - Right:  Batch grid of instanced meshes with wave animation
+        """
+        x_offset = 0 if self.current_section == 0 else 0
+        y_offset = -12 if self.current_section == 0 else 0
+
+        t = self.time_val
+
+        # -----------------------------------------------------------------
+        # LEFT: Hero teapot — turntable on a pedestal
+        # -----------------------------------------------------------------
+        # pgfx.draw_mesh(path, position, scale, rotation, color)
+        # -----------------------------------------------------------------
+
+        hero_x = x_offset - 8
+        hero_y = y_offset
+
+        # Pedestal (cylinder + cube base)
+        pgfx.draw_cylinder(
+            start=(hero_x, hero_y, 0),
+            end=(hero_x, hero_y, 0.8),
+            radius=1.2,
+            color=(0.45, 0.42, 0.40),
+            detail=24
+        )
+        pgfx.draw_cube(
+            center=(hero_x, hero_y, 0.05),
+            size=(2.8, 2.8, 0.1),
+            color=(0.35, 0.33, 0.30)
+        )
+
+        # Hero teapot: slow turntable, white tint (shows OBJ vertex colors)
+        pgfx.draw_mesh(
+            self.mesh_path,
+            position=(hero_x, hero_y, 0.8),
+            scale=1.2,
+            rotation=(0, 0, t * 0.4),
+            color=(1.0, 1.0, 1.0, 1.0)
+        )
+
+        # -----------------------------------------------------------------
+        # CENTER: Feature row — demonstrating individual parameters
+        # -----------------------------------------------------------------
+        # Five teapots in a row, each highlighting a different capability
+        # -----------------------------------------------------------------
+
+        row_x = x_offset - 3
+        row_y = y_offset
+        spacing = 3.0
+
+        # --- 1. Scale variation ---
+        # Three sizes: small, medium, large
+        for i, s in enumerate([0.3, 0.6, 1.0]):
+            pgfx.draw_mesh(
+                self.mesh_path,
+                position=(row_x, row_y - 2 + i * 2, 0.01),
+                scale=s,
+                rotation=(0, 0, 0),
+                color=(0.9, 0.85, 0.75)  # ceramic tint
+            )
+
+        # --- 2. Rotation axes demo ---
+        # Three teapots rotating around X, Y, Z respectively
+        axis_x = row_x + spacing
+        axis_colors = [Colors.RED, Colors.GREEN, Colors.BLUE]
+        for i in range(3):
+            rot = [0.0, 0.0, 0.0]
+            rot[i] = t * 1.5  # rotate around axis i
+            pgfx.draw_mesh(
+                self.mesh_path,
+                position=(axis_x, row_y - 2 + i * 2, 1.0),
+                scale=0.5,
+                rotation=tuple(rot),
+                color=axis_colors[i]
+            )
+            # Draw the rotation axis as a line through the teapot
+            axis_dir = [0.0, 0.0, 0.0]
+            axis_dir[i] = 2.0
+            start = [axis_x, row_y - 2 + i * 2, 1.0]
+            end = list(start)
+            end[i] += axis_dir[i]
+            start_neg = list(start)
+            start_neg[i] -= axis_dir[i]
+            pgfx.draw_line(tuple(start_neg), tuple(end), color=axis_colors[i], width=2.0)
+
+        # --- 3. Color tinting ---
+        # Palette of tinted teapots in an arc
+        tint_x = row_x + spacing * 2
+        n_tints = 6
+        for i in range(n_tints):
+            angle = np.radians(i * 60)
+            px = tint_x + np.cos(angle) * 1.8
+            py = row_y + np.sin(angle) * 1.8
+            pgfx.draw_mesh(
+                self.mesh_path,
+                position=(px, py, 0.01),
+                scale=0.35,
+                rotation=(0, 0, -angle),  # face outward
+                color=Palette.Standard10[i]
+            )
+        # Center label sphere to mark the arrangement
+        pgfx.draw_sphere(
+            center=(tint_x, row_y, 0.5),
+            radius=0.15,
+            color=(1, 1, 1),
+            detail=8
+        )
+
+        # --- 4. Animated breathing teapot ---
+        breath_x = row_x + spacing * 3
+        breath_scale = 0.5 + np.sin(t * 2) * 0.15
+        # Non-uniform scale: breathing on Y axis
+        pgfx.draw_mesh(
+            self.mesh_path,
+            position=(breath_x, row_y, 0.01),
+            scale=(0.6, breath_scale, 0.6),
+            rotation=(0, 0, 0),
+            color=(0.95, 0.6, 0.7)  # rose
+        )
+
+        # -----------------------------------------------------------------
+        # RIGHT: Batch instanced grid with wave animation
+        # -----------------------------------------------------------------
+        # pgfx.draw_meshes_batch(path, positions, scales, rotations, colors)
+        # -----------------------------------------------------------------
+
+        grid_n = 4
+        grid_x = row_x + spacing * 4 + 2
+        total = grid_n * grid_n
+        grid_spacing = 2.5
+
+        # Build arrays (vectorized — no Python loop in hot path)
+        ix, iy = np.meshgrid(
+            np.arange(grid_n, dtype='f4'),
+            np.arange(grid_n, dtype='f4'),
+            indexing='ij'
+        )
+        positions = np.column_stack([
+            ix.ravel() * grid_spacing + grid_x,
+            iy.ravel() * grid_spacing + (row_y - (grid_n - 1) * grid_spacing / 2),
+            np.zeros(total, dtype='f4')
+        ]).astype('f4')
+
+        # Wave animation on Z
+        positions[:, 2] = np.sin(t * 2.0 + ix.ravel() * 0.8 + iy.ravel() * 0.8) * 0.4 + 0.5
+
+        # All same scale
+        scales = np.full((total, 3), 0.4, dtype='f4')
+
+        # Each row spins at a different speed
+        rotations = np.zeros((total, 3), dtype='f4')
+        rotations[:, 2] = t * (0.5 + iy.ravel() * 0.3)
+
+        # Color gradient across grid
+        colors = np.column_stack([
+            ix.ravel() / max(grid_n - 1, 1),
+            0.4 * np.ones(total, dtype='f4'),
+            iy.ravel() / max(grid_n - 1, 1),
+            ]).astype('f4')
+
+        pgfx.draw_meshes_batch(
+            self.mesh_path,
+            positions,
+            scales,
+            rotations,
+            colors
+        )
+
 
 # =============================================================================
 # MAIN
@@ -649,6 +854,7 @@ Controls:
   2     - Flat Primitives (plane, triangle, face)
   3     - Lines and Paths (line, path, arrow, point)
   4     - Batch Rendering (particles, many shapes)
+  5     - Mesh Loading (OBJ instancing, turntable, batch)
   M     - Toggle matte/shiny materials
   R     - Reset rotation
 

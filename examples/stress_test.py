@@ -11,7 +11,7 @@ A comprehensive benchmark to test rendering performance with:
 Use this to verify performance improvements after upgrading to v2.0.
 
 Controls:
-- 1-6: Switch test scenarios
+- 1-7: Switch test scenarios
 - +/-: Increase/decrease object count
 - L: Toggle between cylinders and lines for connections
 - P: Toggle pause
@@ -79,6 +79,8 @@ class StressTest(PiVizFX):
             self._generate_mixed_scene()
         elif self.test_mode == 6:
             self._generate_triangle_mesh()
+        elif self.test_mode == 7:
+            self._generate_mesh_instances()
 
     def _generate_sphere_grid(self):
         """Generate a 3D grid of spheres."""
@@ -283,6 +285,61 @@ class StressTest(PiVizFX):
 
         print(f"[Mode 6] Triangle Mesh: {n_tris} triangles ({grid_size}x{grid_size} grid)")
 
+    def _generate_mesh_instances(self):
+        """Generate a grid of instanced OBJ meshes (teapots)."""
+        import os
+        self.mesh_path = os.path.join(os.path.dirname(__file__), '..', 'exports', 'teapot.obj')
+        if not os.path.exists(self.mesh_path):
+            # Fallback: try relative to cwd
+            self.mesh_path = 'exports/teapot.obj'
+
+        n = int(np.cbrt(max(self.sphere_count, 8)))
+        n = max(2, min(n, 30))
+        self.mesh_grid_n = n
+        total = n ** 3
+
+        spacing = 4.0
+        offset = (n - 1) * spacing / 2
+
+        # Vectorized grid positions
+        ix, iy, iz = np.meshgrid(
+            np.arange(n, dtype='f4'),
+            np.arange(n, dtype='f4'),
+            np.arange(n, dtype='f4'),
+            indexing='ij'
+        )
+        self.mesh_positions = np.column_stack([
+            ix.ravel() * spacing - offset,
+            iy.ravel() * spacing - offset,
+            iz.ravel() * spacing - offset,
+            ]).astype('f4')
+
+        # Color gradient
+        self.mesh_colors = np.column_stack([
+            ix.ravel() / max(n - 1, 1),
+            iy.ravel() / max(n - 1, 1),
+            iz.ravel() / max(n - 1, 1),
+            ]).astype('f4')
+
+        # Uniform scale
+        self.mesh_scales = np.full((total, 3), 0.5, dtype='f4')
+
+        # Initial rotations (zero)
+        self.mesh_rotations = np.zeros((total, 3), dtype='f4')
+
+        # Per-mesh rotation speeds for animation
+        self.mesh_rot_speeds = np.random.uniform(-1.5, 1.5, (total, 3)).astype('f4')
+
+        # Clear other primitives
+        self.sphere_positions = np.zeros((0, 3), dtype='f4')
+        self.sphere_colors = np.zeros((0, 3), dtype='f4')
+        self.sphere_radii = np.zeros(0, dtype='f4')
+        self.connections = np.zeros((0, 2), dtype='i4')
+        self.particles = None
+        self.triangles_v = None
+
+        print(f"[Mode 7] Mesh Instances: {total} teapots ({n}x{n}x{n} grid)")
+
     def _setup_ui(self):
         """Setup UI controls."""
         if not self.ui_manager:
@@ -302,7 +359,7 @@ class StressTest(PiVizFX):
         self.lbl_drawcalls = Label("Draw calls: --", color=(0.7, 0.7, 0.7, 1.0))
         self.ui_manager.add_widget("drawcalls", self.lbl_drawcalls)
 
-        for i in range(1, 7):
+        for i in range(1, 8):
             self.ui_manager.add_widget(
                 f"btn_mode{i}",
                 Button(f"M{i}", lambda m=i: self._set_mode(m))
@@ -346,7 +403,7 @@ class StressTest(PiVizFX):
         """Handle keyboard input."""
         if action != 1:
             return
-        if 49 <= key <= 54:  # 1-6
+        if 49 <= key <= 55:  # 1-7
             self._set_mode(key - 48)
         elif key == 76:  # L
             self.use_lines = not self.use_lines
@@ -480,6 +537,28 @@ class StressTest(PiVizFX):
                 np.max(v1, axis=0)
             )
 
+        # =============================================================
+        # RENDER MESHES (Mode 7) — vectorized rotation + bulk batch API
+        # =============================================================
+        if self.test_mode == 7 and hasattr(self, 'mesh_positions'):
+            n_meshes = len(self.mesh_positions)
+
+            # Vectorized rotation animation: each mesh spins at its own speed
+            rotations = self.mesh_rot_speeds * time_val  # (n, 3)
+
+            # Vectorized bobbing animation
+            positions = self.mesh_positions.copy()
+            mesh_idx = np.arange(n_meshes, dtype='f4')
+            positions[:, 2] += np.sin(time_val * 1.5 + mesh_idx * 0.3) * 0.3
+
+            pgfx.draw_meshes_batch(
+                self.mesh_path,
+                positions,
+                self.mesh_scales,
+                rotations,
+                self.mesh_colors
+            )
+
         # Track performance
         frame_time = time.perf_counter() - frame_start
         self._frame_times.append(frame_time)
@@ -509,10 +588,14 @@ class StressTest(PiVizFX):
         n_spheres = len(self.sphere_positions)
         n_conn = len(self.connections) if self.show_connections else 0
         n_particles = len(self.particles) if self.particles is not None else 0
+        n_meshes = len(self.mesh_positions) if hasattr(self, 'mesh_positions') and self.test_mode == 7 else 0
 
-        self.lbl_objects.text = f"Spheres: {n_spheres}, Conn: {n_conn}, Particles: {n_particles}"
+        if n_meshes > 0:
+            self.lbl_objects.text = f"Meshes: {n_meshes}"
+        else:
+            self.lbl_objects.text = f"Spheres: {n_spheres}, Conn: {n_conn}, Particles: {n_particles}"
 
-        draw_calls = 3 + (1 if n_particles > 0 else 0)
+        draw_calls = 3 + (1 if n_particles > 0 else 0) + (1 if n_meshes > 0 else 0)
         self.lbl_drawcalls.text = f"Draw calls: ~{draw_calls} (batched)"
 
         self._frame_times.clear()
