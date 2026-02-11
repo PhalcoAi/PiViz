@@ -1,3 +1,4 @@
+# piviz/graphics/primitives.py
 """
 PiViz High-Performance Primitives (v1.2.0)
 ========================================
@@ -22,8 +23,10 @@ Author: Yogesh Phalak
 import moderngl
 import numpy as np
 import math
+import os
 from typing import Tuple, Optional, Dict, List, Union
 from dataclasses import dataclass, field
+from .obj_loader import load_obj
 
 # ============================================================
 # GLOBAL STATE
@@ -45,42 +48,34 @@ _uniform_cache: Dict[str, Dict] = {}
 # ============================================================
 # STRUCT-OF-ARRAYS QUEUES
 # ============================================================
-# Pre-allocated numpy arrays that grow as needed.
-# draw_*() writes directly into these — no tuple/list overhead.
-# flush reads them with zero Python loops.
 
 _INITIAL_CAPACITY = 4096
 
-# -- Spheres: 7 floats per instance (center3 + radius1 + color3_alpha1 = 3+1+4 = 8? no: center3, radius, rgba4 = 8)
-# Actually: we group by detail, so we need detail too. But 95%+ of spheres share
-# the same detail. Strategy: store detail separately, fast-path single-detail case.
-# Layout: [cx, cy, cz, radius, r, g, b, a] = 8 floats
+# -- Spheres: 8 floats (cx, cy, cz, radius, r, g, b, a)
 _sphere_data: np.ndarray = np.empty((_INITIAL_CAPACITY, 8), dtype='f4')
 _sphere_details: np.ndarray = np.empty(_INITIAL_CAPACITY, dtype='i4')
 _sphere_count: int = 0
 
-# -- Cubes: need center(3) + size(3) + color(4) + rotation(3) = 13 floats
-# Rotation requires slow path, but we track a flag to skip it when possible
+# -- Cubes: 13 floats (center3, size3, color4, rotation3)
 _cube_data: np.ndarray = np.empty((_INITIAL_CAPACITY, 13), dtype='f4')
 _cube_has_rotation: np.ndarray = np.empty(_INITIAL_CAPACITY, dtype='bool')
 _cube_count: int = 0
 
-# -- Cylinders: 11 floats (start3 + end3 + radius + color4)
+# -- Cylinders: 11 floats (start3, end3, radius, color4)
 _cylinder_data: np.ndarray = np.empty((_INITIAL_CAPACITY, 11), dtype='f4')
 _cylinder_details: np.ndarray = np.empty(_INITIAL_CAPACITY, dtype='i4')
 _cylinder_count: int = 0
 
-# -- Cones: 11 floats (base3 + tip3 + radius + color4)
+# -- Cones: 11 floats (base3, tip3, radius, color4)
 _cone_data: np.ndarray = np.empty((_INITIAL_CAPACITY, 11), dtype='f4')
 _cone_details: np.ndarray = np.empty(_INITIAL_CAPACITY, dtype='i4')
 _cone_count: int = 0
 
-# -- Lines: 11 floats (start3 + end3 + color4 + width1)
+# -- Lines: 11 floats (start3, end3, color4, width1)
 _line_data: np.ndarray = np.empty((_INITIAL_CAPACITY, 11), dtype='f4')
 _line_count: int = 0
 
-# -- Triangles: 22 floats (v1_3 + v2_3 + v3_3 + c1_4 + c2_4 + c3_4 + has_per_vertex_color)
-# Actually store vertices and colors separately for vectorized normal computation
+# -- Triangles: 22 floats (v1_3, v2_3, v3_3, c1_4, c2_4, c3_4)
 _tri_v1: np.ndarray = np.empty((_INITIAL_CAPACITY, 3), dtype='f4')
 _tri_v2: np.ndarray = np.empty((_INITIAL_CAPACITY, 3), dtype='f4')
 _tri_v3: np.ndarray = np.empty((_INITIAL_CAPACITY, 3), dtype='f4')
@@ -88,6 +83,10 @@ _tri_c1: np.ndarray = np.empty((_INITIAL_CAPACITY, 4), dtype='f4')
 _tri_c2: np.ndarray = np.empty((_INITIAL_CAPACITY, 4), dtype='f4')
 _tri_c3: np.ndarray = np.empty((_INITIAL_CAPACITY, 4), dtype='f4')
 _tri_count: int = 0
+
+# -- Meshes: Dictionary of SoA queues
+# _mesh_batches[path] = { 'count': 0, 'capacity': N, 'data': ndarray(N, 13) }
+_mesh_batches: Dict[str, Dict] = {}
 
 
 def _ensure_capacity(current_arr, needed, cols=None):
@@ -108,6 +107,7 @@ _cached_sphere_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
 _cached_cube_vbo: Optional[Tuple[moderngl.Buffer, int]] = None
 _cached_unit_cylinder_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
 _cached_cone_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
+_cached_mesh_vbo: Dict[str, Tuple[moderngl.Buffer, int]] = {}  # path -> (vbo, count)
 
 # Persistent GPU buffers (grow as needed, never shrink)
 _instance_buffer: Optional[moderngl.Buffer] = None
@@ -205,6 +205,7 @@ def _get_program(name: str) -> moderngl.Program:
 
     if name not in _programs:
         if name == 'instanced_solid':
+            # Instanced rendering with per-instance transform and color
             _programs[name] = _ctx.program(
                 vertex_shader='''
                     #version 330
@@ -215,6 +216,7 @@ def _get_program(name: str) -> moderngl.Program:
                     in vec3 in_position;
                     in vec3 in_normal;
 
+                    // Per-instance: 4x4 transform matrix + RGBA color
                     in vec4 inst_row0;
                     in vec4 inst_row1;
                     in vec4 inst_row2;
@@ -252,6 +254,108 @@ def _get_program(name: str) -> moderngl.Program:
 
                     void main() {
                         vec3 norm = normalize(v_normal);
+                        vec3 light = normalize(v_light_dir);
+
+                        float diff = max(dot(norm, light), 0.0);
+
+                        float spec = 0.0;
+                        if (use_specular && diff > 0.0) {
+                            vec3 view_dir = normalize(cam_pos - v_position);
+                            vec3 halfway = normalize(light + view_dir);
+                            spec = pow(max(dot(norm, halfway), 0.0), shininess);
+                        }
+
+                        float ambient = 0.3;
+                        vec3 result = v_color.rgb * (ambient + diff * 0.7);
+                        if (use_specular) {
+                            result += vec3(1.0) * spec * specular_strength;
+                        }
+
+                        frag_color = vec4(result, v_color.a);
+                    }
+                '''
+            )
+
+        elif name == 'instanced_mesh':
+            # Optimized shader for meshes: calculates transform on GPU
+            # Inputs: pos(3), scale(3), rotation(3), color(4) = 13 floats
+            # Vertex color support: in_color (from VBO) * inst_color (from instance)
+            _programs[name] = _ctx.program(
+                vertex_shader='''
+                    #version 330
+                    uniform mat4 view;
+                    uniform mat4 projection;
+                    uniform vec3 light_dir;
+
+                    in vec3 in_position;
+                    in vec3 in_normal;
+                    in vec4 in_color; // Vertex color from OBJ
+
+                    in vec3 inst_pos;
+                    in vec3 inst_scale;
+                    in vec3 inst_rot;
+                    in vec4 inst_color; // Instance color override
+
+                    out vec3 v_normal;
+                    out vec3 v_position;
+                    out vec4 v_color;
+                    out vec3 v_light_dir;
+
+                    mat3 make_rotation(vec3 r) {
+                        float cx = cos(r.x); float sx = sin(r.x);
+                        float cy = cos(r.y); float sy = sin(r.y);
+                        float cz = cos(r.z); float sz = sin(r.z);
+
+                        // Correct column-major construction for Rx * Ry * Rz
+                        // Rx
+                        mat3 Rx = mat3(1, 0, 0, 0, cx, sx, 0, -sx, cx);
+                        // Ry
+                        mat3 Ry = mat3(cy, 0, -sy, 0, 1, 0, sy, 0, cy);
+                        // Rz
+                        mat3 Rz = mat3(cz, sz, 0, -sz, cz, 0, 0, 0, 1);
+                        
+                        // Order: Rz * Ry * Rx
+                        return Rz * Ry * Rx;
+                    }
+
+                    void main() {
+                        mat3 rot = make_rotation(inst_rot);
+                        
+                        // Scale, Rotate, Translate
+                        vec3 world_pos = (rot * (in_position * inst_scale)) + inst_pos;
+                        
+                        v_position = world_pos;
+                        
+                        // Normal matrix
+                        vec3 n = in_normal / inst_scale;
+                        v_normal = rot * normalize(n);
+                        
+                        // Combine vertex color and instance color
+                        v_color = in_color * inst_color;
+                        v_light_dir = light_dir;
+                        gl_Position = projection * view * vec4(world_pos, 1.0);
+                    }
+                ''',
+                fragment_shader='''
+                    #version 330
+                    uniform float shininess;
+                    uniform float specular_strength;
+                    uniform bool use_specular;
+                    uniform vec3 cam_pos;
+
+                    in vec3 v_normal;
+                    in vec3 v_position;
+                    in vec4 v_color;
+                    in vec3 v_light_dir;
+
+                    out vec4 frag_color;
+
+                    void main() {
+                        vec3 norm = normalize(v_normal);
+                        
+                        // Two-sided lighting
+                        if (!gl_FrontFacing) norm = -norm;
+                        
                         vec3 light = normalize(v_light_dir);
                         float diff = max(dot(norm, light), 0.0);
 
@@ -491,6 +595,7 @@ def _get_program(name: str) -> moderngl.Program:
             )
 
         elif name == 'batched_triangles':
+            # Batched triangle rendering with per-vertex color and lighting
             _programs[name] = _ctx.program(
                 vertex_shader='''
                     #version 330
@@ -566,6 +671,7 @@ def _generate_sphere_geometry(detail: int = 12) -> np.ndarray:
     for i in range(detail):
         lat0 = math.pi * (-0.5 + float(i) / detail)
         lat1 = math.pi * (-0.5 + float(i + 1) / detail)
+
         for j in range(detail):
             lon0 = 2 * math.pi * float(j) / detail
             lon1 = 2 * math.pi * float(j + 1) / detail
@@ -582,6 +688,7 @@ def _generate_sphere_geometry(detail: int = 12) -> np.ndarray:
             vertices.extend(p(lat0, lon0))
             vertices.extend(p(lat1, lon1))
             vertices.extend(p(lat1, lon0))
+
     return np.array(vertices, dtype='f4')
 
 
@@ -693,9 +800,31 @@ def _get_cached_cone(detail: int = 16) -> Tuple[moderngl.Buffer, int]:
     return _cached_cone_vbo[detail]
 
 
+def _get_cached_mesh(path: str) -> Tuple[moderngl.Buffer, int]:
+    """Get or create cached mesh geometry."""
+    global _cached_mesh_vbo, _ctx
+    if path not in _cached_mesh_vbo:
+        data = load_obj(path)
+        if len(data) == 0:
+            return None, 0
+        vbo = _ctx.buffer(data.tobytes())
+        _cached_mesh_vbo[path] = (vbo, len(data))
+    return _cached_mesh_vbo[path]
+
+
 # ============================================================
-# TRANSFORM UTILITIES (only needed for rotated cubes now)
+# TRANSFORM UTILITIES
 # ============================================================
+
+def _make_transform_matrix(center, scale, rotation_matrix=None) -> np.ndarray:
+    m = np.eye(4, dtype='f4')
+    if rotation_matrix is not None:
+        m[:3, :3] = rotation_matrix * np.array(scale, dtype='f4')
+    else:
+        m[0, 0], m[1, 1], m[2, 2] = scale
+    m[0, 3], m[1, 3], m[2, 3] = center
+    return m
+
 
 def _make_rotation_matrix_xyz(rotation) -> np.ndarray:
     rx, ry, rz = rotation
@@ -943,6 +1072,66 @@ def draw_face(v1, v2, v3, c1=(1, 0, 0), c2=(0, 1, 0), c3=(0, 0, 1)):
     _update_bounds(np.min(pts, axis=0), np.max(pts, axis=0))
 
 
+def draw_mesh(mesh_path: str, center=(0, 0, 0), scale=1.0, rotation=(0, 0, 0), color=(1, 1, 1), cull_face=True):
+    """
+    Draw a 3D mesh from an OBJ file.
+    
+    Args:
+        mesh_path: Path to .obj file
+        center: Position (x, y, z)
+        scale: Uniform scale (float) or non-uniform (sx, sy, sz)
+        rotation: Euler angles (rx, ry, rz) in radians
+        color: Mesh color (r, g, b) or (r, g, b, a)
+        cull_face: Enable backface culling (default True)
+    """
+    global _mesh_batches
+    
+    if mesh_path not in _mesh_batches:
+        _mesh_batches[mesh_path] = {
+            'count': 0,
+            'capacity': 1024,
+            'pos': np.empty((1024, 3), dtype='f4'),
+            'scale': np.empty((1024, 3), dtype='f4'),
+            'rot': np.empty((1024, 3), dtype='f4'),
+            'color': np.empty((1024, 4), dtype='f4'),
+            'cull': True # Assume consistent culling per mesh path for now
+        }
+    
+    batch = _mesh_batches[mesh_path]
+    i = batch['count']
+    
+    # Ensure capacity
+    if i >= batch['capacity']:
+        new_cap = batch['capacity'] * 2
+        batch['capacity'] = new_cap
+        batch['pos'] = _ensure_capacity(batch['pos'], new_cap)
+        batch['scale'] = _ensure_capacity(batch['scale'], new_cap)
+        batch['rot'] = _ensure_capacity(batch['rot'], new_cap)
+        batch['color'] = _ensure_capacity(batch['color'], new_cap)
+    
+    # Write data
+    batch['pos'][i] = center
+    
+    if isinstance(scale, (int, float)):
+        batch['scale'][i] = (scale, scale, scale)
+    else:
+        batch['scale'][i] = scale
+        
+    batch['rot'][i] = rotation
+    batch['color'][i] = _ensure_rgba(color)
+    batch['cull'] = cull_face # Update culling preference
+    
+    batch['count'] = i + 1
+    
+    # Approximate bounds
+    c = np.array(center, dtype='f4')
+    if isinstance(scale, (int, float)):
+        s = scale
+    else:
+        s = max(scale)
+    _update_bounds(c - s, c + s)
+
+
 def draw_path(points, color=(1, 1, 1), width=1.0):
     """Draw a connected path through points."""
     if len(points) < 2:
@@ -1183,7 +1372,7 @@ def _clear_vao_cache_for_buffer(buffer_type: str):
     keys_to_remove = []
     for key in _cached_vaos:
         type_id = key[0]
-        if buffer_type == 'instance' and type_id in ('sphere', 'cube', 'cylinder', 'cone'):
+        if buffer_type == 'instance' and type_id in ('sphere', 'cube', 'cylinder', 'cone', 'mesh', 'mesh_opt'):
             keys_to_remove.append(key)
         elif buffer_type == 'line' and type_id == 'lines':
             keys_to_remove.append(key)
@@ -1460,6 +1649,67 @@ def _flush_triangles():
     _ctx.enable(moderngl.CULL_FACE)
 
 
+def _flush_meshes():
+    """Render all queued meshes — zero-loop flush using SoA."""
+    global _mesh_batches
+    if not _mesh_batches:
+        return
+
+    prog_name = 'instanced_mesh'
+    prog = _get_program(prog_name)
+
+    for path, batch in _mesh_batches.items():
+        count = batch['count']
+        if count == 0:
+            continue
+            
+        geo_vbo, vertex_count = _get_cached_mesh(path)
+        if geo_vbo is None:
+            continue
+
+        # Pack data: pos(3), scale(3), rot(3), color(4) = 13 floats
+        # We can write these arrays directly into the buffer if we interleave them
+        # or we can use separate attributes if we change the shader.
+        # But for now, let's stick to the single buffer layout for simplicity and just pack them.
+        # Since we have separate arrays, we need to stack them.
+        # This is still much faster than a Python loop.
+        
+        # Stack arrays: (N, 3), (N, 3), (N, 3), (N, 4) -> (N, 13)
+        # np.hstack is efficient
+        instance_data = np.hstack((
+            batch['pos'][:count],
+            batch['scale'][:count],
+            batch['rot'][:count],
+            batch['color'][:count]
+        ))
+
+        _ensure_instance_buffer(instance_data.nbytes)
+        _instance_buffer.write(instance_data.tobytes())
+
+        vao_key = ('mesh_opt', path)
+        def create_vao(gvbo=geo_vbo):
+            return _ctx.vertex_array(prog, [
+                (gvbo, '3f 3f 4f', 'in_position', 'in_normal', 'in_color'),
+                (_instance_buffer, '3f 3f 3f 4f/i', 'inst_pos', 'inst_scale', 'inst_rot', 'inst_color'),
+            ])
+        vao = _get_cached_vao(vao_key, create_vao)
+
+        _set_common_uniforms(prog, prog_name)
+        _set_lighting_uniforms(prog, prog_name)
+
+        should_cull = batch['cull']
+        if not should_cull:
+            _ctx.disable(moderngl.CULL_FACE)
+        
+        vao.render(moderngl.TRIANGLES, instances=count)
+        
+        if not should_cull:
+            _ctx.enable(moderngl.CULL_FACE)
+            
+        # Reset count for next frame
+        batch['count'] = 0
+
+
 # ============================================================
 # MAIN FLUSH (called by engine at end of frame)
 # ============================================================
@@ -1478,6 +1728,7 @@ def flush_all():
     _flush_directional('cone')
     _flush_lines()
     _flush_triangles()
+    _flush_meshes()
 
     # Update global last frame bounds
     global _last_frame_bounds, _current_min, _current_max
@@ -1502,6 +1753,7 @@ def clear_cache():
     global _cached_vaos, _uniform_cache
     global _sphere_count, _cube_count, _cylinder_count, _cone_count
     global _line_count, _tri_count
+    global _cached_mesh_vbo, _mesh_batches
 
     _uniform_cache.clear()
 
@@ -1512,6 +1764,7 @@ def clear_cache():
     _cone_count = 0
     _line_count = 0
     _tri_count = 0
+    _mesh_batches.clear()
 
     for vao in _cached_vaos.values():
         try:
@@ -1547,6 +1800,13 @@ def clear_cache():
         except:
             pass
     _cached_cone_vbo.clear()
+    
+    for vbo, _ in _cached_mesh_vbo.values():
+        try:
+            vbo.release()
+        except:
+            pass
+    _cached_mesh_vbo.clear()
 
     if _instance_buffer is not None:
         try:

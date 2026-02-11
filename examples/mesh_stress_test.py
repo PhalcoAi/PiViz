@@ -12,7 +12,7 @@ import os
 import time
 
 # Configuration
-MESH_FILE = "teapot.obj"  # Will fallback to generating a dummy file if missing
+MESH_FILE = "exports/teapot.obj"  # Will fallback to generating a dummy file if missing
 GRID_SIZE = 20  # Initial grid size
 SPACING = 3.0
 
@@ -80,7 +80,7 @@ def update(dt):
                 pz.mesh(
                     path=MESH_FILE,
                     pos=(px, py, pz_val),
-                    scale=0.8,
+                    scale=0.5,
                     rotation=(rot_x, rot_y, 0),
                     color=(r, g, b)
                 )
