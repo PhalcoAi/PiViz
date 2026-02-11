@@ -87,10 +87,6 @@ def sphere(pos=(0,0,0), radius=1.0, color=(1,1,1)):
 
 def box(pos=(0,0,0), size=(1,1,1), color=(1,1,1), axis=(0,0,0)):
     """Draw a box/cube immediately."""
-    # Convert axis vector to rotation angles if needed, 
-    # but for now we just pass rotation as Euler angles in 'axis' for simplicity
-    # or we could implement vector-to-euler conversion.
-    # Assuming 'axis' here means rotation in Euler angles for direct mapping to draw_cube
     pgfx.draw_cube(center=pos, size=size, color=color, rotation=axis)
 
 def cylinder(pos=(0,0,0), axis=(1,0,0), radius=1.0, color=(1,1,1)):
@@ -122,7 +118,7 @@ def curve(points, color=(1,1,1), radius=0.1):
 
 def mesh(path, pos=(0,0,0), scale=1.0, rotation=(0,0,0), color=(1,1,1)):
     """Draw a 3D mesh from an OBJ file."""
-    pgfx.draw_mesh(mesh_path=path, center=pos, scale=scale, rotation=rotation, color=color)
+    pgfx.draw_mesh(path=path, position=pos, scale=scale, rotation=rotation, color=color)
 
 def rate(fps):
     """Limit frame rate (sleep)."""
