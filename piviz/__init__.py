@@ -86,6 +86,7 @@ cylinder = wrapper.cylinder
 cone = wrapper.cone
 arrow = wrapper.arrow
 curve = wrapper.curve
+mesh = wrapper.mesh
 vec = wrapper.vec
 
 # Expose UI wrapper functions
@@ -106,6 +107,7 @@ __all__ = [
     'cone',
     'arrow',
     'curve',
+    'mesh',
     'vec',
     'add_button',
     'add_slider',

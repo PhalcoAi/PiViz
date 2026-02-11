@@ -285,7 +285,7 @@ class PiVizStudio(mglw.WindowConfig):
         print_border(top=True)
 
         # Header
-        header = f"{ACCENT_COLOR}πViz Studio {LABEL_COLOR}v2.0.2{RESET}   {TITLE_COLOR}Interactive 3D Engine{RESET}"
+        header = f"{ACCENT_COLOR}πViz Studio {LABEL_COLOR}v2.0.3{RESET}   {TITLE_COLOR}Interactive 3D Engine{RESET}"
         print_line(header)
 
         print_border(middle=True)
@@ -298,7 +298,7 @@ class PiVizStudio(mglw.WindowConfig):
 
         # Controls Section (Compact Columns)
         # Mouse Row
-        mouse = f"{LABEL_COLOR}Mouse:{RESET}  {TEXT_COLOR}L-Drag:{RESET} Orbit  │  {TEXT_COLOR}R-Drag:{RESET} Pan  │  {TEXT_COLOR}Scroll:{RESET} Zoom"
+        mouse = f"{LABEL_COLOR}Mouse:{RESET}  {TEXT_COLOR}L-Drag:{RESET} Orbit  │  {TEXT_COLOR}Shift-Drag:{RESET} Pan  │  {TEXT_COLOR}Scroll:{RESET} Zoom"
         print_line(mouse)
 
         # Keys Row

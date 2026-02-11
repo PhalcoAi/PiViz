@@ -120,6 +120,10 @@ def curve(points, color=(1,1,1), radius=0.1):
     """Draw a curve/line through points."""
     pgfx.draw_path(points, color=color, width=radius*10) # width is in pixels for lines
 
+def mesh(path, pos=(0,0,0), scale=1.0, rotation=(0,0,0), color=(1,1,1)):
+    """Draw a 3D mesh from an OBJ file."""
+    pgfx.draw_mesh(mesh_path=path, center=pos, scale=scale, rotation=rotation, color=color)
+
 def rate(fps):
     """Limit frame rate (sleep)."""
     # In a real game loop, this is handled by the windowing system (vsync).
