@@ -203,7 +203,7 @@ class PiVizStudio(mglw.WindowConfig):
         # 2. Load Material Symbols for icons
         # Try to find the font file in resources or system
         # You can download the .ttf from Google Fonts and put it in resources
-        icon_font_path = os.path.join(self.resource_dir, 'MaterialSymbolsRounded.ttf')
+        icon_font_path = os.path.join(self.resource_dir, 'fonts/MaterialSymbolsRounded.ttf')
 
         if os.path.exists(icon_font_path):
             try:
