@@ -1,4 +1,3 @@
-# piviz/core/scene.py
 """
 Base Scene Class for PiViz
 ==========================
@@ -31,7 +30,7 @@ class PiVizFX:
                 self.angle += dt * 45
                 pgfx.draw_cube(rotation=(0, 0, self.angle))
     """
-    
+
     def __init__(self):
         """Initialize scene. Called before OpenGL context is available."""
         self.ctx: Optional['moderngl.Context'] = None
@@ -45,19 +44,16 @@ class PiVizFX:
         self.ctx = ctx
         self.wnd = wnd
         self.studio = studio
-        
-        # Initialize scale
+
         if wnd:
             self.resize(*wnd.size)
-        
-        # Call user setup with appropriate signature
+
         try:
-            # Try new signature first (no ui_manager)
             self.setup()
         except TypeError:
             # Fall back to PhalcoPulse signature with ui_manager
             self.setup(studio.ui_manager)
-        
+
         self._initialized = True
 
     def setup(self, ui_manager=None):
@@ -138,8 +134,6 @@ class PiVizFX:
     def mouse_release_event(self, x: int, y: int, button: int):
         """Called when mouse button is released."""
         pass
-
-    # === Utility Properties ===
 
     @property
     def ui_manager(self):

@@ -1,4 +1,3 @@
-# examples/ui_showcase.py
 """
 UI Widgets Showcase
 ===================
@@ -99,7 +98,7 @@ class UIShowcase(PiVizFX):
 
         # Reset button
         self.ui_manager.add_widget("reset_button", Button(
-            text="Reset View",
+            label="Reset View",
             callback=self._reset
         ))
 
@@ -109,8 +108,7 @@ class UIShowcase(PiVizFX):
     def _reset(self):
         self.rotation = 0.0
         self.cube_scale = 1.0
-        self.rotation_speed = 45.0
-        # Reset camera via property
+        self.rotation_speed = np.pi / 4
         if self.camera:
             self.camera.reset()
 

@@ -1,4 +1,3 @@
-# piviz/graphics/environment.py
 """
 Environment Renderers for PiViz
 ===============================
@@ -33,7 +32,7 @@ class GridRenderer:
         #version 330 core
 
         uniform mat4 mvp;
-        uniform vec2 u_offset; // <--- FIXED: Use // for GLSL comments
+        uniform vec2 u_offset;
 
         in vec3 in_position;
         in vec4 in_color;
@@ -55,7 +54,6 @@ class GridRenderer:
         }
     '''
 
-    # Your preferred logic + u_opacity for LOD
     FRAGMENT_SHADER = '''
         #version 330 core
 
@@ -67,7 +65,7 @@ class GridRenderer:
         out vec4 frag_color;
 
         void main() {
-            float dist = length(v_pos.xy); // Chebyshev to Euclidean distance
+            float dist = length(v_pos.xy);
 
             // 2. Horizon Fade
             // Starts fading at 66% of limit, fully transparent at 99%
@@ -79,7 +77,6 @@ class GridRenderer:
 
             frag_color = vec4(v_color.rgb, final_alpha);
 
-            // Optimization
             if (frag_color.a <= 0.0) discard;
         }
     '''
@@ -275,7 +272,6 @@ class AxesRenderer:
         self.theme = theme
         self.axis_length = 5.0
 
-        # Compile shaders
         self.prog = ctx.program(
             vertex_shader=self.VERTEX_SHADER,
             fragment_shader=self.FRAGMENT_SHADER,
@@ -296,7 +292,6 @@ class AxesRenderer:
         arrow_size = 0.15
         tick_size = 0.08
 
-        # Colors from theme
         cx = self.theme.axis_x
         cy = self.theme.axis_y
         cz = self.theme.axis_z
@@ -339,7 +334,6 @@ class AxesRenderer:
 
         vertices = np.array(vertices, dtype='f4')
 
-        # Release old buffer if exists
         if hasattr(self, 'vbo'):
             self.vbo.release()
             self.vao.release()

@@ -1,4 +1,3 @@
-# piviz/ui/__init__.py
 """
 UI Module for PiViz
 ==================
@@ -19,6 +18,8 @@ from .widgets import (
 from .overlay import PiVizOverlay
 from .manager import UIManager
 from .viewcube import ViewCube
+from .toolbar import Toolbar
+from .toggles import ViewToggles
 
 __all__ = [
     'Label',
@@ -32,4 +33,6 @@ __all__ = [
     'PiVizOverlay',
     'UIManager',
     'ViewCube',
+    'Toolbar',
+    'ViewToggles',
 ]

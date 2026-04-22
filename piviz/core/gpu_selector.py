@@ -1,4 +1,3 @@
-# piviz/core/gpu_selector.py
 """
 PiViz GPU Auto-Selection
 ========================
@@ -8,39 +7,51 @@ Priority: NVIDIA > AMD > Intel > Software
 """
 
 import os
+import re
 import sys
 import subprocess
-from typing import Optional, Tuple, List
-import re
+from typing import Optional, List
 
-# --- VISUAL STYLING CONSTANTS ---
-C_BLUE = "\033[94m"
-C_GREEN = "\033[92m"
-C_GREY = "\033[90m"
-C_RED = "\033[91m"
-C_RESET = "\033[0m"
+# ── Terminal style (matches PiViz banner) ────────────────────────────────────
+_DIM = "\033[90m"
+_WHITE = "\033[97m"
+_ORANGE = "\033[38;5;208m"
+_GREEN = "\033[92m"
+_RED = "\033[91m"
+_RESET = "\033[0m"
 
-
-def visible_len(s):
-    """Returns length of string ignoring ANSI color codes."""
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    return len(ansi_escape.sub('', s))
+_W = 74
+_ansi = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
 
-def print_boxed(content, color=C_BLUE, width=60):
-    """Prints a single line wrapped in a box with auto-alignment."""
-    print(f"\n{color}╔{'═' * (width - 2)}╗{C_RESET}")
-    v_len = visible_len(content)
-    padding = max(0, width - 4 - v_len)
-    print(f"{color}║ {C_RESET}{content}{' ' * padding} {color}║{C_RESET}")
-    print(f"{color}╚{'═' * (width - 2)}╝{C_RESET}")
+def _vlen(s: str) -> int:
+    return len(_ansi.sub('', s))
 
+
+def _row(content: str) -> str:
+    pad = _W - 2 - _vlen(content)
+    return f"{_DIM}│{_RESET} {content}{' ' * max(0, pad - 1)}{_DIM}│{_RESET}"
+
+
+def _div() -> str:
+    return f"{_DIM}├{'─' * (_W - 2)}┤{_RESET}"
+
+
+def _top() -> str:
+    return f"{_DIM}╭{'─' * (_W - 2)}╮{_RESET}"
+
+
+def _bot() -> str:
+    return f"{_DIM}╰{'─' * (_W - 2)}╯{_RESET}"
+
+
+# ── GPU detection ─────────────────────────────────────────────────────────────
 
 def get_available_gpus() -> List[dict]:
     """Detect available GPUs on the system."""
     gpus = []
 
-    # Method 1: Try lspci (Linux)
+    # Method 1: lspci (Linux)
     try:
         result = subprocess.run(
             ['lspci', '-nn'],
@@ -48,33 +59,33 @@ def get_available_gpus() -> List[dict]:
         )
         if result.returncode == 0:
             for line in result.stdout.split('\n'):
-                line_lower = line.lower()
-                if 'vga' in line_lower or '3d' in line_lower or 'display' in line_lower:
-                    # Cleanup name for display
-                    raw_name = line.split(':')[-1].strip()
-                    # Remove common bracket noise
-                    raw_name = raw_name.split('[')[0].strip()
+                ll = line.lower()
+                if not ('vga' in ll or '3d' in ll or 'display' in ll):
+                    continue
 
-                    gpu_info = {'name': raw_name, 'vendor': 'unknown', 'type': 'unknown', 'priority': 0}
+                # Parse: "... controller [class]: Vendor Description [chip] [xxxx:xxxx] (rev N)"
+                # Split on ']: ' to get everything after the class code
+                parts = line.split(']: ', 1)
+                if len(parts) > 1:
+                    raw = parts[1]
+                    # Strip trailing [vendor:device] (rev N)
+                    raw = re.sub(r'\s*\[[\da-f]{4}:[\da-f]{4}\].*$', '', raw, flags=re.IGNORECASE).strip()
+                else:
+                    raw = line.split(':')[-1].strip()
 
-                    if 'nvidia' in line_lower:
-                        gpu_info['vendor'] = 'nvidia';
-                        gpu_info['type'] = 'discrete';
-                        gpu_info['priority'] = 100
-                    elif 'amd' in line_lower or 'radeon' in line_lower:
-                        gpu_info['vendor'] = 'amd';
-                        gpu_info['type'] = 'discrete';
-                        gpu_info['priority'] = 90
-                    elif 'intel' in line_lower:
-                        gpu_info['vendor'] = 'intel';
-                        gpu_info['type'] = 'integrated';
-                        gpu_info['priority'] = 50
+                gpu = {'name': raw, 'vendor': 'unknown', 'type': 'unknown', 'priority': 0}
+                if 'nvidia' in ll:
+                    gpu.update(vendor='nvidia', type='discrete', priority=100)
+                elif 'amd' in ll or 'radeon' in ll:
+                    gpu.update(vendor='amd', type='discrete', priority=90)
+                elif 'intel' in ll:
+                    gpu.update(vendor='intel', type='integrated', priority=50)
 
-                    gpus.append(gpu_info)
-    except:
+                gpus.append(gpu)
+    except Exception:
         pass
 
-    # Method 2: Try nvidia-smi
+    # Method 2: nvidia-smi fallback
     try:
         result = subprocess.run(
             ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
@@ -87,7 +98,7 @@ def get_available_gpus() -> List[dict]:
                         'name': f'NVIDIA {name}', 'vendor': 'nvidia',
                         'type': 'discrete', 'priority': 100
                     })
-    except:
+    except Exception:
         pass
 
     return gpus
@@ -96,15 +107,16 @@ def get_available_gpus() -> List[dict]:
 def check_prime_available() -> bool:
     try:
         return subprocess.run(['prime-select', 'query'], capture_output=True).returncode == 0
-    except:
+    except Exception:
         return False
 
 
 def get_current_prime_profile() -> Optional[str]:
     try:
         res = subprocess.run(['prime-select', 'query'], capture_output=True, text=True)
-        if res.returncode == 0: return res.stdout.strip()
-    except:
+        if res.returncode == 0:
+            return res.stdout.strip()
+    except Exception:
         pass
     return None
 
@@ -120,10 +132,7 @@ def set_amd_offload_env():
 
 
 def probe_default_renderer() -> dict:
-    """
-    Spawns a clean subprocess to check what GPU executes by default.
-    Crucial to avoid overriding a system that is already correct.
-    """
+    """Spawn a clean subprocess to detect the active renderer without env overrides."""
     code = (
         "import moderngl; "
         "ctx=moderngl.create_context(standalone=True); "
@@ -134,7 +143,7 @@ def probe_default_renderer() -> dict:
         result = subprocess.run(
             [sys.executable, '-c', code],
             capture_output=True, text=True, timeout=5,
-            env=os.environ.copy()  # Explicit: use current env
+            env=os.environ.copy()
         )
         if result.returncode == 0:
             lines = result.stdout.strip().split('\n')
@@ -142,18 +151,16 @@ def probe_default_renderer() -> dict:
                 return {'vendor': lines[0].strip(), 'renderer': lines[1].strip()}
     except Exception:
         pass
-
     return {'vendor': 'Unknown', 'renderer': 'Unknown'}
 
 
+# ── Main selection logic ──────────────────────────────────────────────────────
+
 def auto_select_gpu(verbose: bool = True) -> dict:
     """
-    Main Logic:
-    1. Probe what GPU is running by default
-    2. If already NVIDIA → Do nothing (avoid breaking working systems)
-    3. If NVIDIA hardware exists but not active → Force offload
-    4. Same logic for AMD
-    5. Otherwise → Use system default
+    1. Probe the active renderer
+    2. If already on the best GPU → do nothing
+    3. If discrete GPU exists but inactive → force offload env vars
     """
     result = {
         'selected_gpu': None,
@@ -165,70 +172,71 @@ def auto_select_gpu(verbose: bool = True) -> dict:
     gpus = get_available_gpus()
     result['available_gpus'] = gpus
 
-    if verbose:
-        print_boxed(f"{C_GREEN}GPU Auto-Select{C_RESET} {C_GREY}(Smart Detection){C_RESET}")
-
-    # 1. Hardware Scan
     if not gpus:
         if verbose:
-            print(f" {C_GREY}► Status:{C_RESET}   {C_RED}No GPUs detected{C_RESET}")
+            print()
+            print(_top())
+            print(_row(f"{_ORANGE}GPU{_RESET}  {_DIM}·  no GPU detected{_RESET}"))
+            print(_bot())
+            print()
         return result
 
     has_nvidia_hw = any(g['vendor'] == 'nvidia' for g in gpus)
     has_amd_hw = any(g['vendor'] == 'amd' and g['type'] == 'discrete' for g in gpus)
 
-    if verbose:
-        for g in gpus:
-            print(f" {C_GREY}► Found:{C_RESET}   {g['name']}")
-
-    # 2. Runtime Probe - What's actually being used?
     default_renderer = probe_default_renderer()
-    print("Default Renderer:", default_renderer)
     default_vendor = default_renderer['vendor'].lower()
 
     is_already_nvidia = 'nvidia' in default_vendor
     is_already_amd = 'amd' in default_vendor or 'ati' in default_vendor
 
-    # 3. Decision Logic
+    # Decision
     if is_already_nvidia:
-        # System already using NVIDIA - don't touch it
-        result['method'] = 'native_default'
-        result['selected_gpu'] = next((g for g in gpus if g['vendor'] == 'nvidia'), None)
-        status_msg = "NVIDIA (Native)"
+        result.update(method='native_default',
+                      selected_gpu=next((g for g in gpus if g['vendor'] == 'nvidia'), None))
+        status = f"{_WHITE}NVIDIA{_RESET}  {_DIM}native{_RESET}"
 
     elif has_nvidia_hw:
-        # NVIDIA exists but not active - force it
         set_nvidia_offload_env()
-        result['method'] = 'forced_offload'
-        result['env_vars_set'] = ['__NV_PRIME_RENDER_OFFLOAD', '__GLX_VENDOR_LIBRARY_NAME']
-        result['selected_gpu'] = next((g for g in gpus if g['vendor'] == 'nvidia'), None)
-        status_msg = "NVIDIA (Offload Enabled)"
+        result.update(method='forced_offload',
+                      env_vars_set=['__NV_PRIME_RENDER_OFFLOAD', '__GLX_VENDOR_LIBRARY_NAME'],
+                      selected_gpu=next((g for g in gpus if g['vendor'] == 'nvidia'), None))
+        status = f"{_GREEN}NVIDIA{_RESET}  {_DIM}offload enabled{_RESET}"
 
     elif is_already_amd:
-        # AMD already active - don't touch it
-        result['method'] = 'native_default'
-        result['selected_gpu'] = next((g for g in gpus if g['vendor'] == 'amd'), None)
-        status_msg = "AMD (Native)"
+        result.update(method='native_default',
+                      selected_gpu=next((g for g in gpus if g['vendor'] == 'amd'), None))
+        status = f"{_WHITE}AMD{_RESET}  {_DIM}native{_RESET}"
 
     elif has_amd_hw:
-        # AMD exists but not active - force it
         set_amd_offload_env()
-        result['method'] = 'forced_offload'
-        result['env_vars_set'] = ['DRI_PRIME']
-        result['selected_gpu'] = next((g for g in gpus if g['vendor'] == 'amd'), None)
-        status_msg = "AMD (DRI_PRIME Enabled)"
+        result.update(method='forced_offload',
+                      env_vars_set=['DRI_PRIME'],
+                      selected_gpu=next((g for g in gpus if g['vendor'] == 'amd'), None))
+        status = f"{_GREEN}AMD{_RESET}  {_DIM}DRI_PRIME enabled{_RESET}"
 
     else:
-        # Use whatever is running
         result['method'] = 'system_default'
-        status_msg = f"{default_renderer['vendor']} (System Default)"
+        status = f"{_DIM}{default_renderer['vendor']}  ·  system default{_RESET}"
 
     if verbose:
-        print(f" {C_GREY}► Probe :{C_RESET}   {default_renderer['renderer']}")
-        print(f" {C_GREY}► Action:{C_RESET}   {C_GREEN}{status_msg}{C_RESET}\n")
+        print()
+        print(_top())
+        print(_row(f"{_ORANGE}GPU{_RESET}  {_DIM}·  Smart Detection{_RESET}"))
+        print(_div())
+        for g in gpus:
+            print(_row(f"{_DIM}{g['name']}{_RESET}"))
+        print(_div())
+        renderer_line = default_renderer['renderer']
+        print(_row(f"{_DIM}{renderer_line}{_RESET}"))
+        print(_row(status))
+        print(_bot())
+        print()
 
     return result
 
+
+# ── Diagnostics ───────────────────────────────────────────────────────────────
 
 def verify_gpu_selection() -> dict:
     result = {'renderer': 'Unknown', 'vendor': 'Unknown', 'version': 'Unknown'}
@@ -245,36 +253,31 @@ def verify_gpu_selection() -> dict:
 
 
 def print_gpu_info():
-    """Print detailed GPU info in the main style."""
-    print(f"\n{C_BLUE}╔══════════════════════════════════════════════════════╗")
-    print(f"║ {C_GREEN}System Diagnostics{C_BLUE}                                 ║")
-    print(f"╚══════════════════════════════════════════════════════╝{C_RESET}")
-
-    # 1. Hardware
+    """Print detailed GPU diagnostics in PiViz banner style."""
     gpus = get_available_gpus()
-    if not gpus:
-        print(f" {C_GREY}► Hardw:{C_RESET}    {C_RED}No GPUs Found{C_RESET}")
-    else:
-        for i, g in enumerate(gpus):
-            tag = "Hardw:" if i == 0 else "      "
-            print(f" {C_GREY}► {tag}{C_RESET}    {g['name']}")
-
-    # 2. Config
-    prime = get_current_prime_profile()
-    if prime:
-        print(f" {C_GREY}► Prime:{C_RESET}    {prime}")
-
-    # 3. Context
     info = verify_gpu_selection()
-    print(f" {C_GREY}► Render:{C_RESET}   {info['renderer']}")
-    print(f" {C_GREY}► Vendor:{C_RESET}   {info['vendor']}")
-    print(f" {C_GREY}► OpenGL:{C_RESET}   {info['version']}")
-    print(f"\n")
+    prime = get_current_prime_profile()
+
+    print()
+    print(_top())
+    print(_row(f"{_ORANGE}GPU Diagnostics{_RESET}"))
+    print(_div())
+    if gpus:
+        for g in gpus:
+            print(_row(f"{_DIM}{g['name']}{_RESET}"))
+    else:
+        print(_row(f"{_RED}no GPUs found{_RESET}"))
+    if prime:
+        print(_row(f"{_DIM}Prime  ·  {_RESET}{prime}"))
+    print(_div())
+    print(_row(f"{_DIM}Renderer  ·  {_RESET}{info['renderer']}"))
+    print(_row(f"{_DIM}Vendor    ·  {_RESET}{info['vendor']}"))
+    print(_row(f"{_DIM}OpenGL    ·  {_RESET}{info['version']}"))
+    print(_bot())
+    print()
 
 
-# ============================================================
-# AUTO-INIT
-# ============================================================
+# ── Auto-init guard ───────────────────────────────────────────────────────────
 
 _gpu_selection_done = False
 
@@ -287,6 +290,5 @@ def ensure_gpu_selected():
 
 
 if __name__ == '__main__':
-    # Run diagnostics
     auto_select_gpu(verbose=True)
     print_gpu_info()

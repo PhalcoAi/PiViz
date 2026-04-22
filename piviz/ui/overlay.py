@@ -1,7 +1,6 @@
-# piviz/ui/overlay.py
 """
-Performance Overlay for PiViz (IMPROVED)
-========================================
+Performance Overlay for PiViz
+==============================
 
 Modern HUD-style overlay displaying:
 - FPS and frame time
@@ -25,10 +24,14 @@ if TYPE_CHECKING:
 # Try to import GPU utilities (optional)
 try:
     import GPUtil
-
     HAS_GPU_UTIL = True
 except ImportError:
     HAS_GPU_UTIL = False
+
+# Shared status colors used by FPS, usage, and temperature indicators
+_COLOR_OK   = (0.3, 1.0, 0.4, 1.0)
+_COLOR_WARN = (1.0, 0.8, 0.2, 1.0)
+_COLOR_CRIT = (1.0, 0.3, 0.3, 1.0)
 
 
 class PiVizOverlay:
@@ -41,7 +44,6 @@ class PiVizOverlay:
         self._theme: Optional['Theme'] = None
         self.scale = 1.0
 
-        # === IMPROVED: Accurate FPS tracking ===
         # Use deque for O(1) append/popleft instead of np.roll
         self._history_size = 120
         self._frame_times = deque(maxlen=self._history_size)
@@ -57,7 +59,6 @@ class PiVizOverlay:
         self._cpu_idx = 0
         self._gpu_idx = 0
 
-        # === IMPROVED: Actual frame timing ===
         self._last_frame_time = time.perf_counter()
         self._frame_count = 0
 
@@ -72,9 +73,7 @@ class PiVizOverlay:
 
         # CPU update interval (reduced from 0.5s to 1s to save CPU cycles)
         self._cpu_update_interval = 1.0
-        # GPU update interval
         self._gpu_update_interval = 1.0
-        # Graph update interval (don't update every frame)
         self._graph_update_interval = 0.1  # 10 Hz
 
         # Cache for panel dimensions
@@ -82,7 +81,6 @@ class PiVizOverlay:
         self._system_panel_needs_remeasure = True
         self._last_gpu_name = ""
 
-        # Cached values
         self._cpu_percent = 0.0
         self._ram_used_gb = 0.0
         self._gpu_percent = 0.0
@@ -91,17 +89,12 @@ class PiVizOverlay:
         self._vram_percent = 0.0
         self._gpu_name = "N/A"
 
-        # Current display values
         self._display_fps = 60.0
         self._display_frame_ms = 16.67
 
-        # Scene stats (set by user scene)
         self.scene_stats: Dict[str, Any] = {}
-
-        # Timing
         self._start_time = time.time()
 
-        # === Thread-safe GPU monitoring ===
         self._gpu_lock = threading.Lock()
         self._gpu_thread_running = False
 
@@ -133,6 +126,15 @@ class PiVizOverlay:
     def clear_scene_stats(self):
         """Clear all scene statistics."""
         self.scene_stats.clear()
+
+    def _push_hud_style(self):
+        imgui.push_style_color(imgui.COLOR_WINDOW_BACKGROUND, *self._theme.panel)
+        imgui.push_style_var(imgui.STYLE_WINDOW_ROUNDING, 8.0)
+        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (12 * self.scale, 10 * self.scale))
+
+    def _pop_hud_style(self):
+        imgui.pop_style_var(2)
+        imgui.pop_style_color()
 
     def render(self):
         """Render the overlay."""
@@ -167,11 +169,7 @@ class PiVizOverlay:
                  imgui.WINDOW_NO_MOVE |
                  imgui.WINDOW_ALWAYS_AUTO_RESIZE)
 
-        # Add semi-transparent background for readability
-        imgui.push_style_color(imgui.COLOR_WINDOW_BACKGROUND, *self._theme.panel)
-        imgui.push_style_var(imgui.STYLE_WINDOW_ROUNDING, 8.0)
-        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (12 * self.scale, 10 * self.scale))
-
+        self._push_hud_style()
         imgui.begin("##perf", flags=flags)
 
         # Title
@@ -211,8 +209,7 @@ class PiVizOverlay:
             imgui.text_colored(f"max {fps_max:.0f}", text_dim[0], text_dim[1], text_dim[2], 1.0)
 
         imgui.end()
-        imgui.pop_style_var(2)
-        imgui.pop_style_color()
+        self._pop_hud_style()
 
     def _draw_system_panel(self, io, accent, text_dim):
         """Draw system resources panel with proper right alignment and dynamic width."""
@@ -306,10 +303,7 @@ class PiVizOverlay:
                 imgui.WINDOW_ALWAYS_AUTO_RESIZE
         )
 
-        imgui.push_style_color(imgui.COLOR_WINDOW_BACKGROUND, *self._theme.panel)
-        imgui.push_style_var(imgui.STYLE_WINDOW_ROUNDING, 8.0)
-        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (12 * self.scale, 10 * self.scale))
-
+        self._push_hud_style()
         imgui.begin("##system", flags=visible_flags)
 
         # Render actual content
@@ -368,8 +362,7 @@ class PiVizOverlay:
                              graph_size=(graph_width, 25 * self.scale))
 
         imgui.end()
-        imgui.pop_style_var(2)
-        imgui.pop_style_color()
+        self._pop_hud_style()
 
     def _draw_scene_panel(self, io, accent, text_dim):
         """Draw custom scene statistics."""
@@ -381,11 +374,7 @@ class PiVizOverlay:
                  imgui.WINDOW_NO_MOVE |
                  imgui.WINDOW_ALWAYS_AUTO_RESIZE)
 
-        # Add semi-transparent background for readability
-        imgui.push_style_color(imgui.COLOR_WINDOW_BACKGROUND, *self._theme.panel)
-        imgui.push_style_var(imgui.STYLE_WINDOW_ROUNDING, 8.0)
-        imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (12 * self.scale, 10 * self.scale))
-
+        self._push_hud_style()
         imgui.begin("##scene_stats", flags=flags)
 
         text_primary = self._theme.text_primary
@@ -404,15 +393,13 @@ class PiVizOverlay:
                 imgui.text_colored(str(value), *text_primary)
 
         imgui.end()
-        imgui.pop_style_var(2)
-        imgui.pop_style_color()
+        self._pop_hud_style()
 
     def _update_stats(self):
         """Update performance statistics with ACCURATE timing."""
         current_time = time.perf_counter()
         wall_time = time.time()
 
-        # === CRITICAL FIX: Calculate ACTUAL frame time ===
         actual_frame_time = current_time - self._last_frame_time
         self._last_frame_time = current_time
 
@@ -422,16 +409,12 @@ class PiVizOverlay:
 
         actual_fps = 1.0 / actual_frame_time
 
-        # === Exponential Moving Average for smooth display ===
-        # This prevents jitter while still being responsive
+        # EMA smoothing prevents jitter while remaining responsive
         self._smoothed_fps = (self._ema_alpha * actual_fps +
                               (1 - self._ema_alpha) * self._smoothed_fps)
 
-        # Store for display
         self._display_fps = self._smoothed_fps
         self._display_frame_ms = actual_frame_time * 1000
-
-        # Track frame times for statistics
         self._frame_times.append(actual_frame_time)
         self._frame_count += 1
 
@@ -478,25 +461,10 @@ class PiVizOverlay:
             pass
 
     def _get_fps_color(self, fps):
-        if fps >= 60:
-            return (0.3, 1.0, 0.4, 1.0)
-        elif fps >= 30:
-            return (1.0, 0.8, 0.2, 1.0)
-        else:
-            return (1.0, 0.3, 0.3, 1.0)
+        return _COLOR_OK if fps >= 60 else (_COLOR_WARN if fps >= 30 else _COLOR_CRIT)
 
     def _get_usage_color(self, percent):
-        if percent < 50:
-            return (0.3, 1.0, 0.4, 1.0)
-        elif percent < 80:
-            return (1.0, 0.8, 0.2, 1.0)
-        else:
-            return (1.0, 0.3, 0.3, 1.0)
+        return _COLOR_OK if percent < 50 else (_COLOR_WARN if percent < 80 else _COLOR_CRIT)
 
     def _get_temp_color(self, temp):
-        if temp < 60:
-            return (0.3, 1.0, 0.4, 1.0)
-        elif temp < 80:
-            return (1.0, 0.8, 0.2, 1.0)
-        else:
-            return (1.0, 0.3, 0.3, 1.0)
+        return _COLOR_OK if temp < 60 else (_COLOR_WARN if temp < 80 else _COLOR_CRIT)

@@ -1,4 +1,3 @@
-# piviz/ui/viewcube.py
 """
 ViewCube - Interactive 3D Orientation Widget
 ============================================
@@ -21,7 +20,7 @@ Coordinate System (matches Camera):
 import imgui
 import numpy as np
 import math
-from typing import TYPE_CHECKING, Optional, Tuple, List
+from typing import TYPE_CHECKING, Optional, Tuple
 
 if TYPE_CHECKING:
     from ..core.camera import Camera
@@ -135,18 +134,6 @@ class ViewCube:
         self._axis_y_color = (0.4, 0.85, 0.45, 1.0)
         self._axis_z_color = (0.35, 0.55, 0.95, 1.0)
 
-    def set_theme(self, theme: 'Theme'):
-        """Update colors from theme."""
-        accent = theme.accent[:3]
-        self._face_hover_color = (*accent, 0.95)
-        self._face_active_color = (min(1, accent[0] + 0.1),
-                                   min(1, accent[1] + 0.1),
-                                   min(1, accent[2] + 0.1), 1.0)
-        self._edge_hover_color = (*accent, 0.9)
-        self._corner_hover_color = (*accent, 0.95)
-        self._glow_color = (*accent, 0.3)
-        self._text_color = theme.text_primary
-
     def update(self, dt: float, camera: 'Camera') -> bool:
         """
         Update animation state.
@@ -206,20 +193,20 @@ class ViewCube:
         Matches Camera coordinate system (Z-up).
         """
         x, y, z = point
-        
+
         # Convert to radians
         az = math.radians(azimuth_deg)
         el = math.radians(elevation_deg)
-        
+
         # Precompute sines and cosines
         c_az = math.cos(az)
         s_az = math.sin(az)
         c_el = math.cos(el)
         s_el = math.sin(el)
-        
+
         # Calculate Camera Basis Vectors in World Space
         # These must match the View Matrix construction in Camera.get_view_matrix
-        
+
         # Right Vector (Screen X)
         # R = F x WorldUp
         # F (Forward) = Target - Pos = -Pos (normalized)
@@ -228,25 +215,25 @@ class ViewCube:
         rx = -c_az
         ry = s_az
         rz = 0.0
-        
+
         # Up Vector (Screen Y)
         # U = R x F
         # Derived: (-sin(az)sin(el), -cos(az)sin(el), cos(el))
         ux = -s_az * s_el
         uy = -c_az * s_el
         uz = c_el
-        
+
         # View/Depth Vector (Screen Z / Depth)
         # V = -F = Pos (normalized)
         # Derived: (cos(el)sin(az), cos(el)cos(az), sin(el))
         vx = c_el * s_az
         vy = c_el * c_az
         vz = s_el
-        
+
         # Project point
         screen_x = x * rx + y * ry + z * rz
         screen_y = x * ux + y * uy + z * uz
-        depth    = x * vx + y * vy + z * vz
+        depth = x * vx + y * vy + z * vz
 
         return np.array([screen_x, screen_y, depth])
 

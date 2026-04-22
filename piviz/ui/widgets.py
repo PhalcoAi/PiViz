@@ -1,38 +1,37 @@
-# piviz/ui/widgets.py
 """
 UI Widgets for PiViz
 ====================
 
 ImGui-based widgets with a simple API.
-Maintains backward compatibility with PhalcoPulse widget signatures.
 """
 
 import imgui
-from typing import Callable, Optional, List, Tuple, Any
-from dataclasses import dataclass
+from typing import Callable, Optional, List, Tuple
 
 
-@dataclass
 class WidgetBase:
     """Base class for all widgets."""
-    visible: bool = True
-    
+
+    def __init__(self, visible: bool = True):
+        self.visible = visible
+
     def render(self):
-        """Render the widget. Override in subclasses."""
         pass
 
 
 class Label(WidgetBase):
     """Text label widget."""
-    
-    def __init__(self, 
+
+    def __init__(self,
                  text: str = "",
                  align: str = 'left',
-                 color: Optional[Tuple[float, float, float, float]] = None):
+                 color: Optional[Tuple[float, float, float, float]] = None,
+                 visible: bool = True):
+        super().__init__(visible=visible)
         self.text = text
         self.align = align
         self.color = color or (0.9, 0.9, 0.9, 1.0)
-    
+
     def render(self):
         if not self.visible:
             return
@@ -41,62 +40,66 @@ class Label(WidgetBase):
 
 class Button(WidgetBase):
     """Clickable button widget."""
-    
+
     def __init__(self,
-                 text: str = "Button",
-                 callback: Optional[Callable[[], None]] = None):
-        self.text = text
+                 label: str = "Button",
+                 callback: Optional[Callable[[], None]] = None,
+                 visible: bool = True):
+        super().__init__(visible=visible)
+        self.label = label
         self.callback = callback
-    
+
     def render(self):
         if not self.visible:
             return
-        if imgui.button(self.text):
+        if imgui.button(self.label):
             if self.callback:
                 self.callback()
 
 
 class Slider(WidgetBase):
     """Value slider widget."""
-    
+
     def __init__(self,
                  label: str = "Value",
                  min_val: float = 0.0,
                  max_val: float = 1.0,
                  initial_val: float = 0.5,
-                 callback: Optional[Callable[[float], None]] = None):
+                 callback: Optional[Callable[[float], None]] = None,
+                 visible: bool = True):
+        super().__init__(visible=visible)
         self.label = label
         self.min_val = min_val
         self.max_val = max_val
         self.value = initial_val
         self.callback = callback
-    
+
     def render(self):
         if not self.visible:
             return
-        changed, new_value = imgui.slider_float(
-            self.label, self.value, self.min_val, self.max_val
-        )
+        changed, new_value = imgui.slider_float(self.label, self.value, self.min_val, self.max_val)
         if changed:
             self.value = new_value
             if self.callback:
                 self.callback(new_value)
-    
+
     def set_value(self, value: float):
         self.value = value
 
 
 class Checkbox(WidgetBase):
     """Checkbox widget."""
-    
+
     def __init__(self,
                  label: str = "Option",
                  is_checked: bool = False,
-                 callback: Optional[Callable[[bool], None]] = None):
+                 callback: Optional[Callable[[bool], None]] = None,
+                 visible: bool = True):
+        super().__init__(visible=visible)
         self.label = label
         self.is_checked = is_checked
         self.callback = callback
-    
+
     def render(self):
         if not self.visible:
             return
@@ -109,21 +112,22 @@ class Checkbox(WidgetBase):
 
 class ToggleSwitch(WidgetBase):
     """Toggle switch widget (styled checkbox)."""
-    
+
     def __init__(self,
+                 label: str = "",
                  is_on: bool = False,
                  callback: Optional[Callable[[bool], None]] = None,
-                 label: str = ""):
+                 visible: bool = True):
+        super().__init__(visible=visible)
+        self.label = label
         self.is_on = is_on
         self.callback = callback
-        self.label = label
-    
+
     def render(self):
         if not self.visible:
             return
-        # Use checkbox with custom styling
-        label = self.label if self.label else "##toggle"
-        changed, new_value = imgui.checkbox(label, self.is_on)
+        display_label = self.label if self.label else "##toggle"
+        changed, new_value = imgui.checkbox(display_label, self.is_on)
         if changed:
             self.is_on = new_value
             if self.callback:
@@ -132,23 +136,23 @@ class ToggleSwitch(WidgetBase):
 
 class TextInput(WidgetBase):
     """Text input field widget."""
-    
+
     def __init__(self,
+                 label: str = "##input",
                  initial_text: str = "",
                  callback: Optional[Callable[[str], None]] = None,
-                 label: str = "##input",
-                 max_length: int = 256):
+                 max_length: int = 256,
+                 visible: bool = True):
+        super().__init__(visible=visible)
+        self.label = label
         self.text = initial_text
         self.callback = callback
-        self.label = label
         self.max_length = max_length
-    
+
     def render(self):
         if not self.visible:
             return
-        changed, new_text = imgui.input_text(
-            self.label, self.text, self.max_length
-        )
+        changed, new_text = imgui.input_text(self.label, self.text, self.max_length)
         if changed:
             self.text = new_text
             if self.callback:
@@ -157,17 +161,19 @@ class TextInput(WidgetBase):
 
 class Dropdown(WidgetBase):
     """Dropdown selection widget."""
-    
+
     def __init__(self,
-                 options: List[str],
+                 label: str = "##dropdown",
+                 options: Optional[List[str]] = None,
                  selected_index: int = 0,
                  callback: Optional[Callable[[str], None]] = None,
-                 label: str = "##dropdown"):
-        self.options = options
+                 visible: bool = True):
+        super().__init__(visible=visible)
+        self.label = label
+        self.options = options or []
         self.selected_index = selected_index
         self.callback = callback
-        self.label = label
-    
+
     def render(self):
         if not self.visible:
             return
@@ -182,7 +188,7 @@ class Dropdown(WidgetBase):
                 if is_selected:
                     imgui.set_item_default_focus()
             imgui.end_combo()
-    
+
     @property
     def selected_option(self) -> str:
         return self.options[self.selected_index] if self.options else ""
@@ -190,17 +196,19 @@ class Dropdown(WidgetBase):
 
 class ProgressBar(WidgetBase):
     """Progress bar widget."""
-    
+
     def __init__(self,
+                 label: str = "",
                  min_val: float = 0.0,
                  max_val: float = 100.0,
                  value: float = 0.0,
-                 label: str = ""):
+                 visible: bool = True):
+        super().__init__(visible=visible)
+        self.label = label
         self.min_val = min_val
         self.max_val = max_val
         self.value = value
-        self.label = label
-    
+
     def render(self):
         if not self.visible:
             return
@@ -208,6 +216,6 @@ class ProgressBar(WidgetBase):
         fraction = max(0.0, min(1.0, fraction))
         overlay = self.label if self.label else f"{self.value:.0f}%"
         imgui.progress_bar(fraction, (0, 0), overlay)
-    
+
     def set_value(self, value: float):
         self.value = value

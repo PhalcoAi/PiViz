@@ -93,7 +93,8 @@ class USDPlayer(PiVizFX):
                 if self.loop_playback:
                     self.current_frame = self.start_frame
                 else:
-                    self.current_frame = self.end_frame; self.is_playing = False
+                    self.current_frame = self.end_frame;
+                    self.is_playing = False
 
         for instancer in self.point_instancers:
             self._draw_instancer(instancer, self.current_frame)

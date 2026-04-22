@@ -1,4 +1,3 @@
-# piviz/ui/manager.py
 """
 UI Manager for PiViz
 ====================
@@ -142,19 +141,16 @@ class UIManager:
         x, y, max_height = self._calculate_panel_position()
 
         imgui.set_next_window_position(x, y, imgui.ONCE)
-        
-        # Allow resizing and scrolling
-        # Removed fixed width constraint to allow auto-sizing to content
         imgui.set_next_window_size_constraints(
             (self.PANEL_WIDTH, 100),  # Min size
             (float('inf'), max_height) # Max size
         )
 
-        # Style the panel
+        theme = self.studio.theme
+        imgui.push_style_color(imgui.COLOR_WINDOW_BACKGROUND, *theme.panel)
         imgui.push_style_var(imgui.STYLE_WINDOW_ROUNDING, 8.0)
         imgui.push_style_var(imgui.STYLE_WINDOW_PADDING, (12, 12))
 
-        # Enable horizontal scrollbar
         flags = imgui.WINDOW_HORIZONTAL_SCROLLING_BAR
 
         expanded, self._panel_visible = imgui.begin(
@@ -165,14 +161,11 @@ class UIManager:
 
         if expanded:
             for name, widget in self.widgets.items():
-                if hasattr(widget, 'visible') and not widget.visible:
+                if not widget.visible:
                     continue
-
-                # Render widget
                 widget.render()
-
-                # Add spacing between widgets
                 imgui.spacing()
 
         imgui.end()
         imgui.pop_style_var(2)
+        imgui.pop_style_color()

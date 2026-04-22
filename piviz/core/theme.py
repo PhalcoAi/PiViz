@@ -1,10 +1,8 @@
-# piviz/core/theme.py
 """
 Theme System for PiViz
 ======================
 
-Provides consistent color schemes for dark and light modes.
-Useful for academic figures where white backgrounds are preferred.
+Consistent color palettes for dark, light, and publication modes.
 """
 
 from dataclasses import dataclass
@@ -16,7 +14,7 @@ class Theme:
     """Color theme definition."""
     name: str
 
-    # Background
+    # Viewport
     background: Tuple[float, float, float, float]
 
     # Grid
@@ -30,99 +28,94 @@ class Theme:
     axis_z: Tuple[float, float, float, float]
     axis_label: Tuple[float, float, float, float]
 
-    # UI
+    # UI — text_primary must always contrast against panel
     text_primary: Tuple[float, float, float, float]
     text_secondary: Tuple[float, float, float, float]
     accent: Tuple[float, float, float, float]
     accent_hover: Tuple[float, float, float, float]
     panel: Tuple[float, float, float, float]
 
-    # Defaults for primitives
+    # Primitives
     default_color: Tuple[float, float, float]
 
 
-# === Predefined Themes ===
+# ── Dark ─────────────────────────────────────────────────────────────────────
 
 DARK_THEME = Theme(
     name="dark",
 
-    # Deep blue-grey background
-    background=(0.08, 0.09, 0.11, 1.0),
+    background=(0.07, 0.08, 0.10, 1.0),  # deep navy-black
 
-    # Subtle grid
-    grid_major=(0.28, 0.28, 0.32, 0.85),
-    grid_minor=(0.18, 0.18, 0.22, 0.55),
-    grid_origin=(0.45, 0.45, 0.5, 1.0),
+    grid_major=(0.25, 0.26, 0.31, 0.78),
+    grid_minor=(0.15, 0.16, 0.20, 0.42),
+    grid_origin=(0.40, 0.42, 0.48, 1.0),
 
-    # Vivid axes
-    axis_x=(0.95, 0.3, 0.3, 1.0),
-    axis_y=(0.3, 0.95, 0.4, 1.0),
-    axis_z=(0.3, 0.5, 0.95, 1.0),
-    axis_label=(0.8, 0.8, 0.8, 1.0),
+    axis_x=(0.95, 0.28, 0.28, 1.0),
+    axis_y=(0.28, 0.92, 0.38, 1.0),
+    axis_z=(0.28, 0.50, 0.95, 1.0),
+    axis_label=(0.70, 0.70, 0.74, 1.0),
 
-    # UI colors - light text on dark panels
-    text_primary=(0.95, 0.95, 0.97, 1.0),
-    text_secondary=(0.6, 0.6, 0.65, 1.0),
-    accent=(1.0, 0.45, 0.1, 1.0),  # Orange
-    accent_hover=(1.0, 0.55, 0.2, 1.0),
-    panel=(0.12, 0.12, 0.15, 0.92),
+    text_primary=(0.92, 0.92, 0.95, 1.0),  # near-white — works on dark panels
+    text_secondary=(0.48, 0.50, 0.57, 1.0),  # muted
+    accent=(0.98, 0.52, 0.08, 1.0),  # vibrant orange
+    accent_hover=(1.00, 0.65, 0.22, 1.0),
+    panel=(0.10, 0.11, 0.14, 0.93),  # dark glass
 
-    default_color=(0.7, 0.7, 0.7),
+    default_color=(0.60, 0.60, 0.64),
 )
+
+# ── Light ─────────────────────────────────────────────────────────────────────
+# Panels are light; text is near-black; accent is a darker orange for contrast.
 
 LIGHT_THEME = Theme(
     name="light",
 
-    # Clean off-white background
-    background=(0.92, 0.93, 0.94, 1.0),
+    background=(0.90, 0.91, 0.93, 1.0),  # silver-white
 
-    # Visible grid with good contrast
-    grid_major=(0.5, 0.5, 0.55, 0.8),
-    grid_minor=(0.68, 0.68, 0.72, 0.55),
-    grid_origin=(0.3, 0.3, 0.38, 0.95),
+    grid_major=(0.44, 0.44, 0.48, 0.68),
+    grid_minor=(0.60, 0.60, 0.64, 0.42),
+    grid_origin=(0.24, 0.24, 0.32, 0.85),
 
-    # Saturated axes for visibility on light background
-    axis_x=(0.82, 0.18, 0.18, 1.0),
-    axis_y=(0.12, 0.58, 0.18, 1.0),
-    axis_z=(0.18, 0.32, 0.82, 1.0),
-    axis_label=(0.12, 0.12, 0.15, 1.0),
+    axis_x=(0.80, 0.14, 0.14, 1.0),
+    axis_y=(0.10, 0.54, 0.14, 1.0),
+    axis_z=(0.14, 0.28, 0.80, 1.0),
+    axis_label=(0.10, 0.10, 0.13, 1.0),
 
-    # High contrast UI - dark panels with light text (inverted from background)
-    text_primary=(0.95, 0.95, 0.97, 1.0),  # Light text on dark panels
-    text_secondary=(0.7, 0.7, 0.75, 1.0),
-    accent=(1.0, 0.5, 0.15, 1.0),  # Bright orange
-    accent_hover=(1.0, 0.6, 0.25, 1.0),
-    panel=(0.15, 0.15, 0.18, 0.94),  # Dark panels for contrast
+    text_primary=(0.08, 0.08, 0.10, 1.0),  # near-black — works on light panels
+    text_secondary=(0.34, 0.35, 0.40, 1.0),  # medium grey
+    accent=(0.80, 0.30, 0.04, 1.0),  # dark orange — readable on light bg
+    accent_hover=(0.90, 0.40, 0.10, 1.0),
+    panel=(0.87, 0.88, 0.90, 0.96),  # light panel
 
-    default_color=(0.25, 0.25, 0.28),
+    default_color=(0.20, 0.20, 0.23),
 )
+
+# ── Publication ───────────────────────────────────────────────────────────────
 
 PUBLICATION_THEME = Theme(
     name="publication",
 
-    # Pure white for papers
     background=(1.0, 1.0, 1.0, 1.0),
 
-    # Very light grid
-    grid_major=(0.7, 0.7, 0.72, 0.5),
-    grid_minor=(0.85, 0.85, 0.87, 0.3),
-    grid_origin=(0.5, 0.5, 0.55, 0.7),
+    grid_major=(0.68, 0.68, 0.70, 0.48),
+    grid_minor=(0.82, 0.82, 0.84, 0.28),
+    grid_origin=(0.48, 0.48, 0.52, 0.65),
 
-    # Muted professional axes
-    axis_x=(0.75, 0.15, 0.15, 1.0),
-    axis_y=(0.1, 0.55, 0.15, 1.0),
-    axis_z=(0.15, 0.25, 0.75, 1.0),
-    axis_label=(0.2, 0.2, 0.2, 1.0),
+    axis_x=(0.72, 0.12, 0.12, 1.0),
+    axis_y=(0.08, 0.52, 0.12, 1.0),
+    axis_z=(0.12, 0.22, 0.72, 1.0),
+    axis_label=(0.18, 0.18, 0.18, 1.0),
 
-    # Minimal UI
-    text_primary=(0.0, 0.0, 0.0, 1.0),
-    text_secondary=(0.4, 0.4, 0.4, 1.0),
-    accent=(0.2, 0.2, 0.2, 1.0),
-    accent_hover=(0.4, 0.4, 0.4, 1.0),
-    panel=(0.92, 0.92, 0.94, 0.9),
+    text_primary=(0.05, 0.05, 0.05, 1.0),
+    text_secondary=(0.38, 0.38, 0.40, 1.0),
+    accent=(0.15, 0.15, 0.15, 1.0),
+    accent_hover=(0.35, 0.35, 0.35, 1.0),
+    panel=(0.93, 0.93, 0.95, 0.95),
 
-    default_color=(0.25, 0.25, 0.25),
+    default_color=(0.22, 0.22, 0.22),
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 THEMES: Dict[str, Theme] = {
     'dark': DARK_THEME,
@@ -132,5 +125,4 @@ THEMES: Dict[str, Theme] = {
 
 
 def get_theme(name: str) -> Theme:
-    """Get theme by name."""
     return THEMES.get(name.lower(), DARK_THEME)
