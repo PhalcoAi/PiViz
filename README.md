@@ -190,9 +190,9 @@ set_material_matte()
 
 ---
 
-## 3D Mesh Import (OBJ)
+## 3D Mesh Import (OBJ / STL)
 
-πviz loads Wavefront OBJ files with full MTL and texture support. Geometry is cached on first load and rendered with GPU instancing, so the same mesh can appear thousands of times with no repeated parsing.
+πviz loads **Wavefront OBJ** and **STL** (binary and ASCII) files. Geometry is cached on first load and rendered with GPU instancing, so the same mesh can appear thousands of times with no repeated parsing.
 
 ### Script API (`pz.mesh`)
 
@@ -200,6 +200,9 @@ set_material_matte()
 import piviz as pz
 
 def update(dt):
+    # STL — binary or ASCII, auto-detected
+    pz.mesh("part.stl", pos=(0, 0, 0), scale=1.0, color=(0.8, 0.8, 0.9))
+
     # Auto-detect MTL from the OBJ's 'mtllib' directive (default)
     pz.mesh("model.obj", pos=(0, 0, 0), scale=1.0, rotation=(0, 0, 0), color=(1, 1, 1))
 
@@ -216,7 +219,9 @@ def update(dt):
     pz.mesh("model.obj", pos=(0, -5, 0), mtl="material.mtl", texture_dir="textures/")
 ```
 
-### `mtl` parameter semantics
+STL files have no material or texture data — the `color` parameter is the only way to tint them, and `mtl` / `texture_dir` are ignored.
+
+### `mtl` parameter semantics (OBJ only)
 
 | Value | Behaviour |
 |-------|-----------|
@@ -312,6 +317,7 @@ piviz/
 ├── graphics/
 │   ├── primitives.py    # Batched drawing API (pgfx), GPU instancing, texture binding
 │   ├── obj_loader.py    # OBJ/MTL parser — returns per-group (vertices, tex_path) tuples
+│   ├── stl_loader.py    # STL parser (binary + ASCII) — returns single-group (vertices, None)
 │   └── environment.py   # Grid and axes renderers
 ├── ui/
 │   ├── manager.py       # Widget system

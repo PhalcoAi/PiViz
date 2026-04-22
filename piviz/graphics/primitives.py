@@ -19,6 +19,7 @@ OPTIMIZATIONS (v1.2.0 over v1.1.0):
 Author: Yogesh Phalak
 """
 
+import os
 import moderngl
 import numpy as np
 import math
@@ -834,8 +835,13 @@ def _get_cached_mesh(
     global _cached_mesh_vbo, _ctx
     key = _mesh_key(path, mtl, texture_dir)
     if key not in _cached_mesh_vbo:
-        from .obj_loader import load_obj
-        groups = load_obj(path, mtl_override=mtl, texture_dir=texture_dir)
+        ext = os.path.splitext(path)[1].lower()
+        if ext == '.stl':
+            from .stl_loader import load_stl
+            groups = load_stl(path)
+        else:
+            from .obj_loader import load_obj
+            groups = load_obj(path, mtl_override=mtl, texture_dir=texture_dir)
         if not groups:
             _cached_mesh_vbo[key] = []
         else:

@@ -129,22 +129,22 @@ def curve(points, color=(1, 1, 1), radius=0.1):
 def mesh(path, pos=(0, 0, 0), scale=1.0, rotation=(0, 0, 0), color=(1, 1, 1),
          mtl=None, texture_dir=None):
     """
-    Draw a 3D mesh from an OBJ file.
+    Draw a 3D mesh from an OBJ or STL file.
 
     Args:
-        path:        Path to .obj file.
+        path:        Path to .obj or .stl file.
         pos:         (x, y, z) world position.
         scale:       Uniform float or (sx, sy, sz) tuple.
         rotation:    (rx, ry, rz) Euler angles in radians.
         color:       (r, g, b) or (r, g, b, a) tint applied over vertex/material colors.
-        mtl:         Material override.
+        mtl:         OBJ only — material override.
                        None (default) — auto-detect from OBJ's mtllib directive.
                        ''             — skip all materials; mesh renders white.
                        'path/to.mtl'  — use this MTL file instead of the one
                                         declared inside the OBJ.
-        texture_dir: Optional directory to search for texture images referenced by
-                     the MTL.  The MTL's own directory is always searched first;
-                     this adds an extra search location.
+                     Ignored for STL files (STL carries no material data).
+        texture_dir: OBJ only — extra directory to search for texture images.
+                     Ignored for STL files.
     """
     pgfx.draw_mesh(path=path, position=pos, scale=scale, rotation=rotation,
                    color=color, mtl=mtl, texture_dir=texture_dir)
