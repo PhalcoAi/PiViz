@@ -87,6 +87,7 @@ cone = wrapper.cone
 arrow = wrapper.arrow
 curve = wrapper.curve
 mesh = wrapper.mesh
+set_camera = wrapper.set_camera
 vec = wrapper.vec
 
 # Expose UI wrapper functions
@@ -108,6 +109,7 @@ __all__ = [
     'arrow',
     'curve',
     'mesh',
+    'set_camera',
     'vec',
     'add_button',
     'add_slider',

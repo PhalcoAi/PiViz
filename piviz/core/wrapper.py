@@ -126,9 +126,44 @@ def curve(points, color=(1, 1, 1), radius=0.1):
     pgfx.draw_path(points, color=color, width=radius * 10)  # width is in pixels for lines
 
 
-def mesh(path, pos=(0, 0, 0), scale=1.0, rotation=(0, 0, 0), color=(1, 1, 1)):
-    """Draw a 3D mesh from an OBJ file."""
-    pgfx.draw_mesh(path=path, position=pos, scale=scale, rotation=rotation, color=color)
+def mesh(path, pos=(0, 0, 0), scale=1.0, rotation=(0, 0, 0), color=(1, 1, 1),
+         mtl=None, texture_dir=None):
+    """
+    Draw a 3D mesh from an OBJ file.
+
+    Args:
+        path:        Path to .obj file.
+        pos:         (x, y, z) world position.
+        scale:       Uniform float or (sx, sy, sz) tuple.
+        rotation:    (rx, ry, rz) Euler angles in radians.
+        color:       (r, g, b) or (r, g, b, a) tint applied over vertex/material colors.
+        mtl:         Material override.
+                       None (default) — auto-detect from OBJ's mtllib directive.
+                       ''             — skip all materials; mesh renders white.
+                       'path/to.mtl'  — use this MTL file instead of the one
+                                        declared inside the OBJ.
+        texture_dir: Optional directory to search for texture images referenced by
+                     the MTL.  The MTL's own directory is always searched first;
+                     this adds an extra search location.
+    """
+    pgfx.draw_mesh(path=path, position=pos, scale=scale, rotation=rotation,
+                   color=color, mtl=mtl, texture_dir=texture_dir)
+
+
+def set_camera(distance=None, view=None):
+    """
+    Configure the camera.  Safe to call from setup() or update().
+
+    Args:
+        distance: Camera orbit distance (controls zoom level).
+        view:     Named preset – 'iso', 'front', 'top', 'right'.
+    """
+    if _studio_instance and hasattr(_studio_instance, 'camera'):
+        cam = _studio_instance.camera
+        if view is not None:
+            cam.set_view(view)
+        if distance is not None:
+            cam.distance = distance
 
 
 def rate(fps):

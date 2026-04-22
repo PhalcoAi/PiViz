@@ -91,8 +91,8 @@ _tri_count: int = 0
 
 # -- Meshes: 13 floats per instance (pos3 + scale3 + rot3 + color4)
 # Grouped by mesh path — each path maps to its own instance array
-_mesh_instances: Dict[str, np.ndarray] = {}  # path -> (N, 13) f4
-_mesh_counts: Dict[str, int] = {}  # path -> count
+_mesh_instances: Dict[str, np.ndarray] = {}  # mesh_key -> (N, 13) f4
+_mesh_counts: Dict[str, int] = {}            # mesh_key -> count
 
 
 def _ensure_capacity(current_arr, needed, cols=None):
@@ -113,7 +113,10 @@ _cached_sphere_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
 _cached_cube_vbo: Optional[Tuple[moderngl.Buffer, int]] = None
 _cached_unit_cylinder_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
 _cached_cone_vbo: Dict[int, Tuple[moderngl.Buffer, int]] = {}
-_cached_mesh_vbo: Dict[str, Tuple[moderngl.Buffer, int]] = {}  # path -> (vbo, vertex_count)
+_cached_mesh_vbo: Dict[str, List[Tuple[moderngl.Buffer, int, Optional[moderngl.Texture]]]] = {}
+
+# tex_path → moderngl.Texture | None (None = load failed)
+_cached_textures: Dict[str, Optional[moderngl.Texture]] = {}
 
 # Persistent GPU buffers (grow as needed, never shrink)
 _instance_buffer: Optional[moderngl.Buffer] = None
@@ -560,8 +563,8 @@ def _get_program(name: str) -> moderngl.Program:
             )
 
         elif name == 'instanced_mesh':
-            # Compact mesh instancing: 13 floats/instance (pos3 + scale3 + rot3 + color4)
-            # GPU builds rotation matrix — no CPU matrix work needed
+            # Mesh instancing: 13 floats/instance (pos3 + scale3 + rot3 + color4)
+            # Supports optional GPU texture sampling via sampler2D + has_texture uniform
             _programs[name] = _ctx.program(
                 vertex_shader='''
                     #version 330
@@ -571,7 +574,8 @@ def _get_program(name: str) -> moderngl.Program:
 
                     in vec3 in_position;
                     in vec3 in_normal;
-                    in vec4 in_color;  // vertex color from OBJ
+                    in vec4 in_color;   // vertex color (white when textured)
+                    in vec2 in_uv;      // texture UV coords
 
                     in vec3 inst_pos;
                     in vec3 inst_scale;
@@ -582,13 +586,13 @@ def _get_program(name: str) -> moderngl.Program:
                     out vec3 v_position;
                     out vec4 v_color;
                     out vec3 v_light_dir;
+                    out vec2 v_uv;
 
                     void main() {
                         float cx = cos(inst_rot.x), sx = sin(inst_rot.x);
                         float cy = cos(inst_rot.y), sy = sin(inst_rot.y);
                         float cz = cos(inst_rot.z), sz = sin(inst_rot.z);
 
-                        // Rotation: R = Rz * Ry * Rx (column-major)
                         mat3 rot = mat3(
                             cy*cz,              cy*sz,              -sy,
                             sx*sy*cz - cx*sz,   sx*sy*sz + cx*cz,   sx*cy,
@@ -598,12 +602,11 @@ def _get_program(name: str) -> moderngl.Program:
                         vec3 scaled = in_position * inst_scale;
                         vec3 world_pos = rot * scaled + inst_pos;
                         v_position = world_pos;
-
-                        // Normal transform: rot * (normal / scale) then normalize
                         v_normal = normalize(rot * (in_normal / inst_scale));
 
                         v_color = in_color * inst_color;
                         v_light_dir = light_dir;
+                        v_uv = in_uv;
                         gl_Position = projection * view * vec4(world_pos, 1.0);
                     }
                 ''',
@@ -613,15 +616,22 @@ def _get_program(name: str) -> moderngl.Program:
                     uniform float specular_strength;
                     uniform bool use_specular;
                     uniform vec3 cam_pos;
+                    uniform sampler2D tex0;
+                    uniform bool has_texture;
 
                     in vec3 v_normal;
                     in vec3 v_position;
                     in vec4 v_color;
                     in vec3 v_light_dir;
+                    in vec2 v_uv;
 
                     out vec4 frag_color;
 
                     void main() {
+                        vec4 base = has_texture
+                            ? texture(tex0, v_uv) * v_color
+                            : v_color;
+
                         vec3 norm = normalize(v_normal);
                         if (!gl_FrontFacing) norm = -norm;
 
@@ -636,9 +646,9 @@ def _get_program(name: str) -> moderngl.Program:
                         }
 
                         float ambient = 0.3;
-                        vec3 result = v_color.rgb * (ambient + diff * 0.7);
+                        vec3 result = base.rgb * (ambient + diff * 0.7);
                         if (use_specular) result += vec3(1.0) * spec * specular_strength;
-                        frag_color = vec4(result, v_color.a);
+                        frag_color = vec4(result, base.a);
                     }
                 '''
             )
@@ -783,19 +793,59 @@ def _get_cached_cone(detail: int = 16) -> Tuple[moderngl.Buffer, int]:
     return _cached_cone_vbo[detail]
 
 
-def _get_cached_mesh(path: str) -> Tuple[Optional[moderngl.Buffer], int]:
-    """Get or create cached mesh geometry from OBJ file.
-    Returns (vbo, vertex_count). VBO format: 10 floats (pos3 + normal3 + rgba4)."""
+def _get_or_load_texture(tex_path: str) -> Optional[moderngl.Texture]:
+    """Upload an image to the GPU as a mipmapped RGBA texture (cached)."""
+    global _cached_textures, _ctx
+    if tex_path not in _cached_textures:
+        try:
+            from PIL import Image
+            img = Image.open(tex_path).convert('RGBA').transpose(Image.FLIP_TOP_BOTTOM)
+            tex = _ctx.texture(img.size, 4, img.tobytes())
+            tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+            tex.build_mipmaps()
+            _cached_textures[tex_path] = tex
+        except Exception as e:
+            print(f"[PiViz] Texture load failed {tex_path}: {e}")
+            _cached_textures[tex_path] = None
+    return _cached_textures[tex_path]
+
+
+def _mesh_key(path: str, mtl: str = None, texture_dir: str = None) -> str:
+    """Stable string key for a (path, mtl, texture_dir) combination.
+
+    mtl=None  → auto-detect from OBJ's mtllib directive (default).
+    mtl=''    → skip all material loading (renders white).
+    mtl=<str> → use explicit .mtl file path.
+    """
+    if mtl is None and not texture_dir:
+        return path  # fast path — backwards compatible
+    mtl_part = '\x01' if mtl == '' else (mtl or '')  # '' != None in cache
+    return f"{path}\x00{mtl_part}\x00{texture_dir or ''}"
+
+
+def _get_cached_mesh(
+    path: str,
+    mtl: str = None,
+    texture_dir: str = None,
+) -> List[Tuple[moderngl.Buffer, int, Optional[moderngl.Texture]]]:
+    """Get or create cached mesh groups. Returns list of (vbo, vertex_count, texture).
+    VBO format: 12 floats per vertex (pos3 + normal3 + rgba4 + uv2).
+    One entry per material group."""
     global _cached_mesh_vbo, _ctx
-    if path not in _cached_mesh_vbo:
+    key = _mesh_key(path, mtl, texture_dir)
+    if key not in _cached_mesh_vbo:
         from .obj_loader import load_obj
-        data = load_obj(path)
-        if len(data) == 0:
-            _cached_mesh_vbo[path] = (None, 0)
+        groups = load_obj(path, mtl_override=mtl, texture_dir=texture_dir)
+        if not groups:
+            _cached_mesh_vbo[key] = []
         else:
-            vbo = _ctx.buffer(data.tobytes())
-            _cached_mesh_vbo[path] = (vbo, len(data))
-    return _cached_mesh_vbo[path]
+            entries = []
+            for arr, tex_path in groups:
+                vbo = _ctx.buffer(arr.tobytes())
+                tex = _get_or_load_texture(tex_path) if tex_path else None
+                entries.append((vbo, len(arr), tex))
+            _cached_mesh_vbo[key] = entries
+    return _cached_mesh_vbo[key]
 
 
 # ============================================================
@@ -1056,16 +1106,26 @@ def draw_path(points, color=(1, 1, 1), width=1.0):
         draw_line(points[i], points[i + 1], color, width)
 
 
-def draw_mesh(path, position=(0, 0, 0), scale=(1, 1, 1), rotation=(0, 0, 0), color=(1, 1, 1, 1)):
+def draw_mesh(
+    path,
+    position=(0, 0, 0),
+    scale=(1, 1, 1),
+    rotation=(0, 0, 0),
+    color=(1, 1, 1, 1),
+    mtl=None,
+    texture_dir=None,
+):
     """
     Queue a mesh instance for batched rendering.
 
     Args:
-        path: Path to OBJ file (geometry cached on first load)
-        position: (x, y, z) world position
-        scale: (sx, sy, sz) or scalar
-        rotation: (rx, ry, rz) Euler angles in radians (Rz * Ry * Rx order)
-        color: (r, g, b) or (r, g, b, a) — multiplied with vertex colors from OBJ
+        path:        Path to .obj file (geometry cached on first load)
+        position:    (x, y, z) world position
+        scale:       (sx, sy, sz) or scalar
+        rotation:    (rx, ry, rz) Euler angles in radians (Rz * Ry * Rx order)
+        color:       (r, g, b) or (r, g, b, a) — multiplied with vertex colors
+        mtl:         Optional explicit .mtl path (overrides 'mtllib' in OBJ)
+        texture_dir: Optional directory to search for texture images
     """
     global _mesh_instances, _mesh_counts
 
@@ -1073,34 +1133,45 @@ def draw_mesh(path, position=(0, 0, 0), scale=(1, 1, 1), rotation=(0, 0, 0), col
         scale = (scale, scale, scale)
     c = _ensure_rgba(color)
 
-    if path not in _mesh_instances:
-        _mesh_instances[path] = np.empty((_INITIAL_CAPACITY, 13), dtype='f4')
-        _mesh_counts[path] = 0
+    key = _mesh_key(path, mtl, texture_dir)
+    if key not in _mesh_instances:
+        _mesh_instances[key] = np.empty((_INITIAL_CAPACITY, 13), dtype='f4')
+        _mesh_counts[key] = 0
 
-    i = _mesh_counts[path]
-    _mesh_instances[path] = _ensure_capacity(_mesh_instances[path], i + 1)
+    i = _mesh_counts[key]
+    _mesh_instances[key] = _ensure_capacity(_mesh_instances[key], i + 1)
 
-    _mesh_instances[path][i, 0:3] = position
-    _mesh_instances[path][i, 3:6] = scale
-    _mesh_instances[path][i, 6:9] = rotation
-    _mesh_instances[path][i, 9:13] = c
-    _mesh_counts[path] = i + 1
+    _mesh_instances[key][i, 0:3] = position
+    _mesh_instances[key][i, 3:6] = scale
+    _mesh_instances[key][i, 6:9] = rotation
+    _mesh_instances[key][i, 9:13] = c
+    _mesh_counts[key] = i + 1
 
     p = np.array(position, dtype='f4')
     s_max = max(abs(scale[0]), abs(scale[1]), abs(scale[2]))
     _update_bounds(p - s_max, p + s_max)
 
 
-def draw_meshes_batch(path, positions, scales, rotations, colors):
+def draw_meshes_batch(
+    path,
+    positions,
+    scales,
+    rotations,
+    colors,
+    mtl=None,
+    texture_dir=None,
+):
     """
     Queue many mesh instances from numpy arrays — zero per-mesh loop.
 
     Args:
-        path: Path to OBJ file
-        positions: (N, 3) float32 array
-        scales: (N, 3) float32 array, or scalar, or (3,) broadcast
-        rotations: (N, 3) float32 array, or (3,) broadcast, or None for no rotation
-        colors: (N, 3) or (N, 4) float32 array
+        path:        Path to .obj file
+        positions:   (N, 3) float32 array
+        scales:      (N, 3) float32 array, or scalar, or (3,) broadcast
+        rotations:   (N, 3) float32 array, or (3,) broadcast, or None
+        colors:      (N, 3) or (N, 4) float32 array
+        mtl:         Optional explicit .mtl path (overrides 'mtllib' in OBJ)
+        texture_dir: Optional directory to search for texture images
     """
     global _mesh_instances, _mesh_counts
 
@@ -1127,23 +1198,24 @@ def draw_meshes_batch(path, positions, scales, rotations, colors):
     if not isinstance(colors, np.ndarray):
         colors = np.array(colors, dtype='f4')
 
-    if path not in _mesh_instances:
-        _mesh_instances[path] = np.empty((max(_INITIAL_CAPACITY, n), 13), dtype='f4')
-        _mesh_counts[path] = 0
+    key = _mesh_key(path, mtl, texture_dir)
+    if key not in _mesh_instances:
+        _mesh_instances[key] = np.empty((max(_INITIAL_CAPACITY, n), 13), dtype='f4')
+        _mesh_counts[key] = 0
 
-    needed = _mesh_counts[path] + n
-    _mesh_instances[path] = _ensure_capacity(_mesh_instances[path], needed)
+    needed = _mesh_counts[key] + n
+    _mesh_instances[key] = _ensure_capacity(_mesh_instances[key], needed)
 
-    s = _mesh_counts[path]
-    _mesh_instances[path][s:s + n, 0:3] = positions
-    _mesh_instances[path][s:s + n, 3:6] = scales
-    _mesh_instances[path][s:s + n, 6:9] = rotations
+    s = _mesh_counts[key]
+    _mesh_instances[key][s:s + n, 0:3] = positions
+    _mesh_instances[key][s:s + n, 3:6] = scales
+    _mesh_instances[key][s:s + n, 6:9] = rotations
     if colors.shape[-1] == 3:
-        _mesh_instances[path][s:s + n, 9:12] = colors
-        _mesh_instances[path][s:s + n, 12] = 1.0
+        _mesh_instances[key][s:s + n, 9:12] = colors
+        _mesh_instances[key][s:s + n, 12] = 1.0
     else:
-        _mesh_instances[path][s:s + n, 9:13] = colors
-    _mesh_counts[path] = s + n
+        _mesh_instances[key][s:s + n, 9:13] = colors
+    _mesh_counts[key] = s + n
 
     s_max = float(np.max(np.abs(scales)))
     _update_bounds(np.min(positions, axis=0) - s_max, np.max(positions, axis=0) + s_max)
@@ -1792,39 +1864,57 @@ def _flush_triangles():
 # ============================================================
 
 def _flush_meshes():
-    """Render all queued mesh instances — one instanced draw call per mesh path."""
+    """Render all queued mesh instances — one instanced draw call per (mesh key, group)."""
     global _mesh_counts
 
-    for path, count in _mesh_counts.items():
+    for key, count in _mesh_counts.items():
         if count == 0:
             continue
 
-        mesh_vbo, vertex_count = _get_cached_mesh(path)
-        if mesh_vbo is None or vertex_count == 0:
+        # Decode key back to (path, mtl, texture_dir)
+        parts = key.split('\x00')
+        path = parts[0]
+        if len(parts) > 1:
+            raw = parts[1]
+            mtl = '' if raw == '\x01' else (raw or None)
+        else:
+            mtl = None
+        texture_dir = parts[2] if len(parts) > 2 and parts[2] else None
+
+        groups = _get_cached_mesh(path, mtl, texture_dir)
+        if not groups:
             continue
 
         prog_name = 'instanced_mesh'
         prog = _get_program(prog_name)
 
-        data = _mesh_instances[path][:count]  # (count, 13): pos3 + scale3 + rot3 + color4
-
+        data = _mesh_instances[key][:count]  # (count, 13): pos3 + scale3 + rot3 + color4
         _ensure_instance_buffer(data.nbytes)
         _instance_buffer.write(data.tobytes())
 
-        # VAO key includes path to avoid conflicts between different meshes
-        vao_key = ('mesh', path)
-
-        def create_vao(gvbo=mesh_vbo):
-            return _ctx.vertex_array(prog, [
-                (gvbo, '3f 3f 4f', 'in_position', 'in_normal', 'in_color'),
-                (_instance_buffer, '3f 3f 3f 4f/i', 'inst_pos', 'inst_scale', 'inst_rot', 'inst_color'),
-            ])
-
-        vao = _get_cached_vao(vao_key, create_vao)
-
         _set_common_uniforms(prog, prog_name)
         _set_lighting_uniforms(prog, prog_name)
-        vao.render(moderngl.TRIANGLES, instances=count)
+
+        for grp_idx, (geo_vbo, vertex_count, texture) in enumerate(groups):
+            if vertex_count == 0:
+                continue
+
+            has_tex = texture is not None
+            prog['has_texture'].value = has_tex
+            if has_tex:
+                texture.use(location=0)
+                prog['tex0'].value = 0
+
+            vao_key = ('mesh', key, grp_idx)
+
+            def create_vao(gvbo=geo_vbo):
+                return _ctx.vertex_array(prog, [
+                    (gvbo, '3f 3f 4f 2f', 'in_position', 'in_normal', 'in_color', 'in_uv'),
+                    (_instance_buffer, '3f 3f 3f 4f/i', 'inst_pos', 'inst_scale', 'inst_rot', 'inst_color'),
+                ])
+
+            vao = _get_cached_vao(vao_key, create_vao)
+            vao.render(moderngl.TRIANGLES, instances=count)
 
 
 def flush_all():
@@ -1864,7 +1954,7 @@ def flush_all():
 def clear_cache():
     """Clear all cached geometry (call on context recreation)."""
     global _cached_sphere_vbo, _cached_cube_vbo, _cached_unit_cylinder_vbo, _cached_cone_vbo
-    global _cached_mesh_vbo
+    global _cached_mesh_vbo, _cached_textures
     global _instance_buffer, _line_buffer, _triangle_buffer
     global _cached_vaos, _uniform_cache
     global _sphere_count, _cube_count, _cylinder_count, _cone_count
@@ -1917,13 +2007,22 @@ def clear_cache():
             pass
     _cached_cone_vbo.clear()
 
-    for vbo, _ in _cached_mesh_vbo.values():
+    for groups in _cached_mesh_vbo.values():
+        for vbo, _, tex in groups:
+            try:
+                if vbo is not None:
+                    vbo.release()
+            except:
+                pass
+    _cached_mesh_vbo.clear()
+
+    for tex in _cached_textures.values():
         try:
-            if vbo is not None:
-                vbo.release()
+            if tex is not None:
+                tex.release()
         except:
             pass
-    _cached_mesh_vbo.clear()
+    _cached_textures.clear()
 
     if _instance_buffer is not None:
         try:
