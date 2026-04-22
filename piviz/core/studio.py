@@ -253,7 +253,7 @@ class PiVizStudio(mglw.WindowConfig):
 
         print()
         print(f"{DIM}╭{'─' * (W - 2)}╮{RESET}")
-        row(f"{ORANGE}πViz{RESET}  {WHITE}v2.1.0{RESET}  {DIM}·  Interactive 3D Engine{RESET}")
+        row(f"{ORANGE}πViz{RESET}  {WHITE}v2.2.0{RESET}  {DIM}·  Interactive 3D Engine{RESET}")
         div()
         row(f"{DIM}{platform.system()}  ·  Python {platform.python_version()}  ·  {gpu_info}{RESET}")
         div()
