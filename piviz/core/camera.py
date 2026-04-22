@@ -76,6 +76,7 @@ class Camera:
         self.pan_sensitivity = 0.001
         self.zoom_sensitivity = 0.1
         self.key_rotate_speed = 90.0  # degrees per second
+        self.key_pan_speed = 0.5      # fraction of distance per second
 
         self._initial_state = self.get_state()
 
@@ -291,21 +292,38 @@ class Camera:
         """Handle mouse scroll."""
         self.zoom(y_offset)
 
-    def on_key_hold(self, key_name: str, dt: float):
-        """Handle continuous key press for smooth rotation."""
-        step = self.key_rotate_speed * dt
+    def on_key_hold(self, key_name: str, dt: float, shift: bool = False):
+        """Handle continuous key press.
 
-        if key_name == 'left':
-            self.azimuth -= step
-        elif key_name == 'right':
-            self.azimuth += step
-        elif key_name == 'up':
-            self.elevation += step
-        elif key_name == 'down':
-            self.elevation -= step
-
-        self.elevation = np.clip(self.elevation, self.min_elevation, self.max_elevation)
-        self.azimuth = self.azimuth % 360
+        Without Shift: orbit (rotate azimuth / elevation).
+        With Shift: pan (translate target along camera right/up axes).
+        """
+        if shift:
+            step = self.key_pan_speed * self.distance * dt
+            az = math.radians(self.azimuth)
+            # Forward = direction camera is looking, projected onto XY ground plane
+            forward = np.array([-math.sin(az), -math.cos(az), 0], dtype=np.float32)
+            right = self.get_right_vector()
+            if key_name == 'up':
+                self.target += forward * step
+            elif key_name == 'down':
+                self.target -= forward * step
+            elif key_name == 'left':
+                self.target -= right * step
+            elif key_name == 'right':
+                self.target += right * step
+        else:
+            step = self.key_rotate_speed * dt
+            if key_name == 'left':
+                self.azimuth -= step
+            elif key_name == 'right':
+                self.azimuth += step
+            elif key_name == 'up':
+                self.elevation += step
+            elif key_name == 'down':
+                self.elevation -= step
+            self.elevation = np.clip(self.elevation, self.min_elevation, self.max_elevation)
+            self.azimuth = self.azimuth % 360
 
     def get_orthographic_matrix(self) -> np.ndarray:
         """Calculate orthographic projection matrix."""

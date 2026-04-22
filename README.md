@@ -24,6 +24,7 @@
 - **Publication-Quality Export** – High-resolution screenshots and MP4 video recording with clean, UI-free output
 - **Blinn-Phong Shading** – Configurable material system with adjustable shininess and specular highlights
 - **Immediate-Mode API** – Simple, Pythonic drawing interface with zero boilerplate
+- **OBJ Mesh Import** – Load Wavefront OBJ files with automatic MTL parsing, per-material-group instanced rendering, and GPU texture sampling (mipmapped, linear-filtered)
 - **Automatic GPU Selection** – Detects and uses the best available GPU (NVIDIA > AMD > Intel)
 - **USD File Playback** – Native support for Pixar Universal Scene Description files
 - **Integrated UI System** – Built-in widgets for simulation control and parameter adjustment
@@ -156,9 +157,12 @@ The rendering pipeline automatically batches all primitives of the same type int
 
 | Action | Input |
 |--------|-------|
-| Rotate View | Left Click + Drag |
-| Pan | Right Click + Drag / Middle Click + Drag |
+| Orbit | Left Click + Drag |
+| Pan | Shift + Left Drag / Right Click + Drag |
 | Zoom | Scroll Wheel |
+| Rotate view | Arrow Keys |
+| Pan view | Shift + Arrow Keys |
+| Fit to scene | `H` |
 | Toggle Grid | `G` |
 | Toggle Axes | `A` |
 | Toggle Theme | `T` |
@@ -183,6 +187,91 @@ set_material_matte()
 ```
 
 **Shininess scale:** 1-10 (soft) | 32 (balanced) | 64-128 (metallic)
+
+---
+
+## 3D Mesh Import (OBJ)
+
+πviz loads Wavefront OBJ files with full MTL and texture support. Geometry is cached on first load and rendered with GPU instancing, so the same mesh can appear thousands of times with no repeated parsing.
+
+### Script API (`pz.mesh`)
+
+```python
+import piviz as pz
+
+def update(dt):
+    # Auto-detect MTL from the OBJ's 'mtllib' directive (default)
+    pz.mesh("model.obj", pos=(0, 0, 0), scale=1.0, rotation=(0, 0, 0), color=(1, 1, 1))
+
+    # Skip all materials — render as solid white geometry
+    pz.mesh("model.obj", pos=(5, 0, 0), mtl='', color=(0.8, 0.8, 0.8))
+
+    # Apply a flat color tint over the geometry, no textures
+    pz.mesh("model.obj", pos=(-5, 0, 0), mtl='', color=(0.4, 0.8, 1.0))
+
+    # Provide an explicit MTL file (ignores 'mtllib' inside the OBJ)
+    pz.mesh("model.obj", pos=(0, 5, 0), mtl="path/to/material.mtl")
+
+    # Extra search directory for texture images
+    pz.mesh("model.obj", pos=(0, -5, 0), mtl="material.mtl", texture_dir="textures/")
+```
+
+### `mtl` parameter semantics
+
+| Value | Behaviour |
+|-------|-----------|
+| `None` (default) | Auto-detect from the OBJ's `mtllib` directive |
+| `''` (empty string) | Skip all material loading — renders white |
+| `'path/to/file.mtl'` | Use this MTL file; ignore `mtllib` inside the OBJ |
+
+### Texture rendering
+
+When a material declares `map_Kd`, the texture is uploaded to the GPU as a mipmapped RGBA texture and sampled per-pixel in the fragment shader:
+
+```
+final = texture(tex0, uv) * instance_color_tint
+```
+
+Without a texture, the MTL `Kd` (diffuse) colour is baked into the vertex buffer and multiplied by the instance tint at render time. The `color` parameter on `pz.mesh()` is always the final multiplicative tint applied on top.
+
+### File organisation
+
+The simplest setup keeps the OBJ, MTL, and textures in the same directory — they are all found automatically:
+
+```
+assets/
+├── model.obj
+├── model.mtl
+├── diffuse_0.jpg
+└── diffuse_1.jpg
+```
+
+If textures live elsewhere, pass `texture_dir=` with the extra search path.
+
+### Low-level API (`pgfx`)
+
+```python
+from piviz import pgfx
+
+# Single instance
+pgfx.draw_mesh(path, position=(0,0,0), scale=1.0, rotation=(0,0,0),
+               color=(1,1,1,1), mtl=None, texture_dir=None)
+
+# Batch of N instances — zero Python loops, pure numpy
+pgfx.draw_meshes_batch(path, positions, scales, rotations, colors,
+                       mtl=None, texture_dir=None)
+# positions:  (N, 3) float32
+# scales:     (N, 3) float32, or scalar, or (3,) broadcast
+# rotations:  (N, 3) float32 Euler angles (rx, ry, rz) in radians, or None
+# colors:     (N, 3) or (N, 4) float32
+```
+
+`rotation` is applied as **Rz × Ry × Rx** on the GPU. OBJ files are typically Y-up; for a Z-up scene apply a base X rotation of `-π/2`:
+
+```python
+import numpy as np
+pz.mesh("model.obj", rotation=(-np.pi/2, 0, 0))
+```
 
 ---
 
@@ -221,7 +310,8 @@ piviz/
 │   ├── scene.py         # PiVizFX base class for simulations
 │   └── theme.py         # Dark/Light/Publication color schemes
 ├── graphics/
-│   ├── primitives.py    # Batched drawing API (pgfx)
+│   ├── primitives.py    # Batched drawing API (pgfx), GPU instancing, texture binding
+│   ├── obj_loader.py    # OBJ/MTL parser — returns per-group (vertices, tex_path) tuples
 │   └── environment.py   # Grid and axes renderers
 ├── ui/
 │   ├── manager.py       # Widget system
@@ -254,6 +344,12 @@ pgfx.draw_particles(positions, colors, sizes)
 
 # Triangular meshes
 pgfx.draw_triangle(v1, v2, v3, color)
+
+# OBJ mesh import — single instance
+pgfx.draw_mesh(path, position, scale, rotation, color, mtl=None, texture_dir=None)
+
+# OBJ mesh import — N instances, zero Python loops
+pgfx.draw_meshes_batch(path, positions, scales, rotations, colors, mtl=None, texture_dir=None)
 ```
 
 ### Scientific Colormaps

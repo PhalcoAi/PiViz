@@ -257,8 +257,8 @@ class PiVizStudio(mglw.WindowConfig):
         div()
         row(f"{DIM}{platform.system()}  ·  Python {platform.python_version()}  ·  {gpu_info}{RESET}")
         div()
-        row(f"{DIM}Orbit{RESET}  {WHITE}L-drag{RESET}    {DIM}Pan{RESET}  {WHITE}Shift+drag{RESET}    {DIM}Zoom{RESET}  {WHITE}Scroll{RESET}")
-        row(f"{DIM}H{RESET}  Home    {DIM}G{RESET}  Grid    {DIM}A{RESET}  Axes    {DIM}T{RESET}  Theme    {DIM}0–3{RESET}  Views")
+        row(f"{DIM}Orbit{RESET}  {WHITE}L-drag / Arrows{RESET}    {DIM}Pan{RESET}  {WHITE}Shift+drag / Shift+Arrows{RESET}")
+        row(f"{DIM}Zoom{RESET}  {WHITE}Scroll{RESET}    {DIM}H{RESET}  Home    {DIM}G{RESET}  Grid    {DIM}A{RESET}  Axes    {DIM}T{RESET}  Theme    {DIM}0–3{RESET}  Views")
         print(f"{DIM}╰{'─' * (W - 2)}╯{RESET}")
         print(f"  {DIM}ready.{RESET}\n")
 
@@ -548,14 +548,19 @@ class PiVizStudio(mglw.WindowConfig):
 
     def _process_input(self, dt: float):
         """Process held keys for camera movement."""
-        if self.wnd.keys.LEFT in self._keys_pressed:
-            self.camera.on_key_hold('left', dt)
-        if self.wnd.keys.RIGHT in self._keys_pressed:
-            self.camera.on_key_hold('right', dt)
-        if self.wnd.keys.UP in self._keys_pressed:
-            self.camera.on_key_hold('up', dt)
-        if self.wnd.keys.DOWN in self._keys_pressed:
-            self.camera.on_key_hold('down', dt)
+        keys = self.wnd.keys
+        shift = (
+            getattr(keys, 'LEFT_SHIFT', None) in self._keys_pressed or
+            getattr(keys, 'RIGHT_SHIFT', None) in self._keys_pressed
+        )
+        if keys.LEFT in self._keys_pressed:
+            self.camera.on_key_hold('left', dt, shift=shift)
+        if keys.RIGHT in self._keys_pressed:
+            self.camera.on_key_hold('right', dt, shift=shift)
+        if keys.UP in self._keys_pressed:
+            self.camera.on_key_hold('up', dt, shift=shift)
+        if keys.DOWN in self._keys_pressed:
+            self.camera.on_key_hold('down', dt, shift=shift)
 
     def _push_ui_style(self) -> int:
         """Push theme-derived ImGui colors for all native widgets. Returns push count."""
