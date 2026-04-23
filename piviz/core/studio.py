@@ -253,7 +253,7 @@ class PiVizStudio(mglw.WindowConfig):
 
         print()
         print(f"{DIM}╭{'─' * (W - 2)}╮{RESET}")
-        row(f"{ORANGE}πViz{RESET}  {WHITE}v2.2.0{RESET}  {DIM}·  Interactive 3D Engine{RESET}")
+        row(f"{ORANGE}πViz{RESET}  {WHITE}v2.2.1{RESET}  {DIM}·  Interactive 3D Engine{RESET}")
         div()
         row(f"{DIM}{platform.system()}  ·  Python {platform.python_version()}  ·  {gpu_info}{RESET}")
         div()
@@ -550,8 +550,8 @@ class PiVizStudio(mglw.WindowConfig):
         """Process held keys for camera movement."""
         keys = self.wnd.keys
         shift = (
-            getattr(keys, 'LEFT_SHIFT', None) in self._keys_pressed or
-            getattr(keys, 'RIGHT_SHIFT', None) in self._keys_pressed
+                getattr(keys, 'LEFT_SHIFT', None) in self._keys_pressed or
+                getattr(keys, 'RIGHT_SHIFT', None) in self._keys_pressed
         )
         if keys.LEFT in self._keys_pressed:
             self.camera.on_key_hold('left', dt, shift=shift)

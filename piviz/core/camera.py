@@ -309,9 +309,9 @@ class Camera:
             elif key_name == 'down':
                 self.target -= forward * step
             elif key_name == 'left':
-                self.target -= right * step
-            elif key_name == 'right':
                 self.target += right * step
+            elif key_name == 'right':
+                self.target -= right * step
         else:
             step = self.key_rotate_speed * dt
             if key_name == 'left':
